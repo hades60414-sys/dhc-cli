@@ -50,7 +50,7 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
   const borderColor = borderColorMap[toolCategory || 'default'] || borderColorMap.default;
 
   return (
-    <div className={`border-l-2 ${borderColor} my-1 py-0.5 pl-3 ${className}`}>
+    <div className={`border-l-2 ${borderColor} my-0.5 py-0.5 pl-3 ${className}`}>
       <CollapsibleSection
         title={title}
         toolName={toolName}

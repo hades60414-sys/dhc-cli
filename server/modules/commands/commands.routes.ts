@@ -187,6 +187,18 @@ const builtInCommands = [
     metadata: { type: "builtin" },
   },
   {
+    name: "/clear",
+    description: "Start a fresh conversation in this project (context reset)",
+    namespace: "builtin",
+    metadata: { type: "builtin" },
+  },
+  {
+    name: "/new",
+    description: "Alias of /clear",
+    namespace: "builtin",
+    metadata: { type: "builtin" },
+  },
+  {
     name: "/memory",
     description: "Open CLAUDE.md memory file for editing",
     namespace: "builtin",

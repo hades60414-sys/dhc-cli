@@ -1,13 +1,15 @@
 import { useEffect, useRef } from 'react';
-import { Check, Edit2, GitBranch, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Bell, BellOff, Check, Edit2, GitBranch, LogOut, MoreHorizontal, Package, PackageOpen, Star, StarOff, Trash2, Users, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ActionMenu } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import type { LLMProvider } from '@/shared/types';
+import type { SessionBox } from '@/shared/sessionBoxes';
 import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
 import { useProviderSessionIdCopy } from '@/modules/sidebar/hooks/useProviderSessionIdCopy';
 import { PROVIDER_LABELS } from '@/modules/sidebar/utils/sidebarProjectFormatting';
+import QuickTitleButton from '@/modules/sidebar/QuickTitleButton';
 
 type SessionOptionsProps = {
   sessionId: string;
@@ -31,6 +33,19 @@ type SessionOptionsProps = {
   onFork?: () => void;
   /** Withheld where the row has nowhere to send a delete. */
   canDelete?: boolean;
+  /** DHC CLI C1: pin state and toggle; omitted where the list does not support pinning. */
+  isPinned?: boolean;
+  onTogglePin?: () => void;
+  /** DHC CLI 收納盒: the boxes this session can move to; omitted where the list has no boxes. */
+  boxMenu?: { otherBoxes: SessionBox[]; isInBox: boolean; onMove: (boxId: string | null) => void };
+  /** DHC CLI co work: opens the share dialog; omitted where the row cannot be shared. */
+  onShare?: () => void;
+  isShared?: boolean;
+  /** DHC CLI co work: on someone else's session shared with this project, stops seeing it. */
+  onLeaveShare?: () => void;
+  /** DHC CLI 靜音模式: on a shared session, whether this person muted it and the switch. */
+  isMuted?: boolean;
+  onToggleMute?: () => void;
   className?: string;
   t: TFunction;
 };
@@ -59,6 +74,14 @@ export default function SessionOptions({
   onDeleteSession,
   onFork,
   canDelete = true,
+  isPinned = false,
+  onTogglePin,
+  boxMenu,
+  onShare,
+  isShared = false,
+  onLeaveShare,
+  isMuted = false,
+  onToggleMute,
   className,
   t,
 }: SessionOptionsProps) {
@@ -115,9 +138,10 @@ export default function SessionOptions({
               }
             }}
             onClick={(event) => event.stopPropagation()}
-            className="w-32 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+            className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
             autoFocus
           />
+          <QuickTitleButton sessionId={sessionId} onTitle={onRenameDraftChange} />
           <button
             className="flex h-6 w-6 items-center justify-center rounded bg-green-50 hover:bg-green-100 dark:bg-green-900/20 dark:hover:bg-green-900/40"
             onClick={(event) => {
@@ -160,6 +184,13 @@ export default function SessionOptions({
             </div>
           )}
           items={[
+            ...(onTogglePin ? [{
+              key: 'pin',
+              label: isPinned ? '取消收藏' : '加入收藏',
+              description: isPinned ? undefined : '收藏的 session 排在這個專案最上方（只在這台瀏覽器）',
+              icon: isPinned ? StarOff : Star,
+              onSelect: onTogglePin,
+            }] : []),
             ...(projectId !== null ? [{
               key: 'rename',
               label: 'Rename session',
@@ -182,6 +213,43 @@ export default function SessionOptions({
               icon: GitBranch,
               onSelect: onFork,
             }] : []),
+            ...(onShare ? [{
+              key: 'co-workspace',
+              label: 'Co-Work',
+              description: isShared ? '已共享，點這裡調整或停止' : '選擇跟誰共享這個 session',
+              icon: Users,
+              onSelect: onShare,
+            }] : []),
+            ...(onToggleMute ? [{
+              key: 'co-work-mute',
+              label: isMuted ? '取消靜音' : '靜音模式',
+              description: isMuted ? '別人在用這個對話時，再提醒我' : '先放著：別人在用也不亮燈、不跳通知',
+              icon: isMuted ? Bell : BellOff,
+              onSelect: onToggleMute,
+            }] : []),
+            ...(onLeaveShare ? [{
+              key: 'co-work-leave',
+              label: '退出 Co-Work',
+              description: '不再看到這個對話；之後要回來請對方再邀一次',
+              icon: LogOut,
+              onSelect: onLeaveShare,
+            }] : []),
+            ...(boxMenu ? [
+              ...boxMenu.otherBoxes.map((box, index) => ({
+                key: `box:${box.id}`,
+                label: `移到「${box.name}」`,
+                icon: Package,
+                showDividerBefore: index === 0,
+                onSelect: () => boxMenu.onMove(box.id),
+              })),
+              ...(boxMenu.isInBox ? [{
+                key: 'box:out',
+                label: '移出收納盒',
+                icon: PackageOpen,
+                showDividerBefore: boxMenu.otherBoxes.length === 0,
+                onSelect: () => boxMenu.onMove(null),
+              }] : []),
+            ] : []),
             ...(canDelete && !isProcessing ? [{
               key: 'delete',
               label: 'Archive or delete session',

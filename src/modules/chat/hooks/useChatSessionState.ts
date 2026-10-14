@@ -10,6 +10,7 @@ import { createCachedDiffCalculator } from '@/modules/chat/utils/messageTransfor
 import { normalizedToChatMessages } from '@/modules/chat/hooks/useChatMessages';
 import { findSearchTargetIndex, resolveSearchWindowSize } from '@/modules/chat/utils/searchTargetLocator';
 import { readSelectedProvider } from '@/shared/selectedProvider';
+import { toServerTime } from '@/shared/serverClock';
 import type { SearchTarget } from '@/modules/chat/utils/searchTargetLocator';
 
 const INITIAL_VISIBLE_MESSAGES = 100;
@@ -129,10 +130,11 @@ function chatMessageToNormalized(
   provider: LLMProvider,
 ): NormalizedMessage | null {
   const id = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  // DHC CLI: callers stamp with the browser's clock; the store merges these rows with the host's transcript.
   const ts = msg.timestamp instanceof Date
-    ? msg.timestamp.toISOString()
+    ? new Date(toServerTime(msg.timestamp.getTime())).toISOString()
     : typeof msg.timestamp === 'number'
-      ? new Date(msg.timestamp).toISOString()
+      ? new Date(toServerTime(msg.timestamp)).toISOString()
       : String(msg.timestamp);
   const base = { id, sessionId, timestamp: ts, provider };
 
@@ -227,6 +229,8 @@ export function useChatSessionState({
   const isUserScrolledUpRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
+  /** DHC：已自動載入整段歷史的對話（每個對話只自動載一次）。 */
+  const autoLoadedAllSessionRef = useRef<string | null>(null);
   const topLoadLockRef = useRef(false);
   const pendingScrollRestoreRef = useRef<ScrollRestoreState | null>(null);
   const pendingInitialScrollRef = useRef(true);
@@ -442,14 +446,10 @@ export function useChatSessionState({
     container.scrollTop = container.scrollHeight;
   }, []);
 
+  // DHC：整段歷史預設全載（跳轉拉桿要用），回到最新不再縮回最後一頁。
   const scrollToBottomAndReset = useCallback(() => {
     scrollToBottom();
-    if (allMessagesLoaded) {
-      setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
-      setAllMessagesLoaded(false);
-      allMessagesLoadedRef.current = false;
-    }
-  }, [allMessagesLoaded, scrollToBottom]);
+  }, [scrollToBottom]);
 
   const isNearBottom = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -1007,10 +1007,39 @@ export function useChatSessionState({
     return () => container.removeEventListener('scroll', handleScroll);
   }, [handleScroll]);
 
+  // DHC：舊訊息只在「捲到頂」的捲動事件時載入；簡約檢視把中間摺起來後內容常常不滿一屏、根本捲不動，
+  // 就永遠載不到。內容不夠高時自動往前載一頁，直到捲得動或全部載完；某次沒載到新東西就停，避免空轉。
+  const autoFillStalledRef = useRef(false);
+  useEffect(() => {
+    autoFillStalledRef.current = false;
+  }, [selectedSession?.id]);
+  useEffect(() => {
+    if (!isActive || !hasMoreMessages || isLoadingMoreMessages || isLoadingSessionMessages) return;
+    if (allMessagesLoadedRef.current || autoFillStalledRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const container = scrollContainerRef.current;
+      if (!container || container.scrollHeight > container.clientHeight + 100) return;
+      void loadOlderMessages(container).then((didLoad) => {
+        if (!didLoad) autoFillStalledRef.current = true;
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chatMessages.length, hasMoreMessages, isActive, isLoadingMoreMessages, isLoadingSessionMessages, loadOlderMessages]);
+
+  /** DHC：「向上捲動以載入更多」那行也可以直接點。 */
+  const loadOlderMessagesNow = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (container) void loadOlderMessages(container);
+  }, [loadOlderMessages]);
+
   // "Load all" overlay visibility is driven by scroll-to-top in handleScroll;
   // timers are cleared on session change via the reset effect above.
 
+  // DHC：開對話時自動載入整段歷史（右側跳轉拉桿從第一則提問就有點），這種載入不跳「載入全部」浮層。
+  const silentLoadAllRef = useRef(false);
   const loadAllMessages = useCallback(async () => {
+    const silent = silentLoadAllRef.current;
+    silentLoadAllRef.current = false;
     if (!isActive) return;
     if (!selectedSession || !selectedProject) return;
     if (isLoadingAllMessages) return;
@@ -1018,7 +1047,7 @@ export function useChatSessionState({
     allMessagesLoadedRef.current = true;
     isLoadingMoreRef.current = true;
     setIsLoadingAllMessages(true);
-    setShowLoadAllOverlay(true);
+    if (!silent) setShowLoadAllOverlay(true);
     if (loadAllOverlayTimerRef.current) {
       clearTimeout(loadAllOverlayTimerRef.current);
       loadAllOverlayTimerRef.current = null;
@@ -1040,7 +1069,10 @@ export function useChatSessionState({
       if (currentSessionId !== requestSessionId) return;
 
       if (slot) {
-        if (scrollRestoreState) {
+        if (silent && !isUserScrolledUpRef.current) {
+          // Opening a conversation should still land on the latest message.
+          pendingInitialScrollRef.current = true;
+        } else if (scrollRestoreState) {
           pendingScrollRestoreRef.current = scrollRestoreState;
         }
 
@@ -1050,6 +1082,7 @@ export function useChatSessionState({
         setVisibleMessageCount(Infinity);
         setAllMessagesLoaded(true);
 
+        if (silent) return;
         setLoadAllJustFinished(true);
         if (loadAllFinishedTimerRef.current) clearTimeout(loadAllFinishedTimerRef.current);
         loadAllFinishedTimerRef.current = setTimeout(() => {
@@ -1070,6 +1103,16 @@ export function useChatSessionState({
       setIsLoadingAllMessages(false);
     }
   }, [isActive, selectedSession, selectedProject, isLoadingAllMessages, currentSessionId, sessionStore]);
+
+  useEffect(() => {
+    const sessionId = selectedSession?.id;
+    if (!isActive || !sessionId || currentSessionId !== sessionId) return;
+    if (!hasMoreMessages || isLoadingSessionMessages || isLoadingAllMessages || allMessagesLoadedRef.current) return;
+    if (autoLoadedAllSessionRef.current === sessionId) return;
+    autoLoadedAllSessionRef.current = sessionId;
+    silentLoadAllRef.current = true;
+    void loadAllMessages();
+  }, [isActive, selectedSession?.id, currentSessionId, hasMoreMessages, isLoadingSessionMessages, isLoadingAllMessages, loadAllMessages]);
 
   /**
    * Fetches the whole transcript into the store and returns it, without
@@ -1117,6 +1160,7 @@ export function useChatSessionState({
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
+    loadOlderMessagesNow,
     loadAllMessages,
     loadFullTranscript,
     allMessagesLoaded,

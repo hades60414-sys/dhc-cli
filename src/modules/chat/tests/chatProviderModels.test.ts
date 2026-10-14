@@ -18,6 +18,9 @@ const okJson = (data: unknown) => Promise.resolve({
   json: async () => data,
 });
 
+/** Catalogs `api.providers.models` answers with, keyed by provider; a missing key answers `data: null`. */
+const modelCatalogs: Record<string, unknown> = {};
+
 vi.mock('@/shared/api', () => ({
   api: {
     // The preference store PATCHes through api.user; it is stubbed rather than
@@ -27,7 +30,10 @@ vi.mock('@/shared/api', () => ({
       savePreferences: () => okJson({ success: true, preferences: {} }),
     },
     providers: {
-      models: () => okJson({ success: true, data: null }),
+      models: (provider: string) => okJson({
+        success: true,
+        data: modelCatalogs[provider] ? { models: modelCatalogs[provider] } : null,
+      }),
       capabilities: () => okJson({ success: true, data: null }),
       sessionActiveModel: () => okJson({ success: true, data: null }),
       setSessionActiveModel: () => okJson({ success: true, data: null }),
@@ -53,6 +59,9 @@ beforeEach(() => {
   // The preference store is a module-level singleton, so its in-memory copy
   // outlives localStorage.clear() and would leak one test's writes into the next.
   resetUserPreferences();
+  for (const provider of Object.keys(modelCatalogs)) {
+    delete modelCatalogs[provider];
+  }
 });
 
 afterEach(() => {
@@ -145,4 +154,27 @@ test('the active provider’s model is what currentProviderModel reports', async
     assert.equal(result.current.provider, 'cursor');
   });
   assert.equal(result.current.currentProviderModel, 'cursor-active');
+});
+
+test('the Claude catalog names the Opus version; other options and providers keep their labels', async () => {
+  modelCatalogs.claude = {
+    DEFAULT: 'opus',
+    OPTIONS: [
+      { value: 'default', label: 'Default (recommended)' },
+      { value: 'opus', label: 'Opus' },
+      { value: 'opus[1m]', label: 'Opus (1M context)' },
+    ],
+  };
+  modelCatalogs.opencode = { DEFAULT: 'opus', OPTIONS: [{ value: 'opus', label: 'Opus' }] };
+
+  const { result } = await renderProviderState();
+
+  await waitFor(() => {
+    assert.ok(result.current.providerModelCatalog.claude);
+  });
+  assert.deepEqual(
+    result.current.providerModelCatalog.claude?.OPTIONS.map((option) => option.label),
+    ['Default (recommended)', 'Opus 5.5', 'Opus 5.5 (1M context)'],
+  );
+  assert.equal(result.current.providerModelCatalog.opencode?.OPTIONS[0]?.label, 'Opus');
 });

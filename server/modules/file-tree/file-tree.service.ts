@@ -471,7 +471,18 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
         }
       }
 
-      return buildFileTree(projectRoot, 10, 0, includeEntry);
+      // DHC CLI: a folder full of run logs used to fail the whole tree with 413.
+      // Fall back to shallower listings so the top levels still show.
+      for (const maximumDepth of [10, 3, 1, 0]) {
+        try {
+          return await buildFileTree(projectRoot, maximumDepth, 0, includeEntry);
+        } catch (error) {
+          if (!(error instanceof AppError) || error.statusCode !== 413 || maximumDepth === 0) {
+            throw error;
+          }
+        }
+      }
+      throw createFileTreeError('Unreachable', 500, 'FILE_TREE_ERROR');
     },
 
     async createEntry(input) {

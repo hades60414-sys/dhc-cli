@@ -24,7 +24,9 @@ import {
 } from "@/shared/ui";
 import ModelGroupList, { type ModelGroup } from "@/modules/chat/composer/ModelGroupList";
 import ModelLibraryPanel from "@/modules/chat/modals/ModelLibraryPanel";
+import NewSessionBoxPicker from "@/modules/chat/transcript/NewSessionBoxPicker";
 import { writeSelectedProvider } from '@/shared/selectedProvider';
+import { filterEnabledAgents, useEnabledAgents } from '@/shared/dhcConfig';
 
 const PROVIDER_META: { id: LLMProvider; name: string }[] = [
   { id: "claude", name: "Anthropic" },
@@ -63,6 +65,8 @@ type ProviderSelectionEmptyStateProps = {
   isTaskMasterInstalled: boolean | null;
   onShowAllTasks?: (() => void) | null;
   setInput: React.Dispatch<React.SetStateAction<string>>;
+  /** DHC CLI 收納盒: lets a new conversation be filed into one of this project's boxes. */
+  projectId?: string;
 };
 
 function getModelConfig(
@@ -100,6 +104,7 @@ export default function ProviderSelectionEmptyState({
   isTaskMasterInstalled,
   onShowAllTasks,
   setInput,
+  projectId,
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -121,15 +126,16 @@ export default function ProviderSelectionEmptyState({
     }
   }, []);
 
-  /** One collapsible branch per provider, in the order the picker lists them. */
+  const enabledAgents = useEnabledAgents();
+  /** One collapsible branch per provider (only those dhc.config.json lists), in the order the picker lists them. */
   const visibleProviderGroups = useMemo<ModelGroup[]>(
-    () => PROVIDER_META.map((meta) => ({
+    () => filterEnabledAgents(PROVIDER_META, (meta) => meta.id, enabledAgents).map((meta) => ({
       key: meta.id,
       provider: meta.id,
       name: meta.name,
       models: providerModelCatalog[meta.id]?.OPTIONS ?? [],
     })),
-    [providerModelCatalog],
+    [providerModelCatalog, enabledAgents],
   );
 
   const nextTaskPrompt = t("tasks.nextTaskPrompt", {
@@ -313,6 +319,8 @@ export default function ProviderSelectionEmptyState({
               }[provider]
             }
           </p>
+
+          {projectId && <NewSessionBoxPicker projectId={projectId} />}
 
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground/60">
             <Trans

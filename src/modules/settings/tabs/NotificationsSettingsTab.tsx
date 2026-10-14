@@ -1,8 +1,18 @@
-import { Bell, BellOff, BellRing, Loader2, Play, Volume2 } from 'lucide-react';
+import { useState } from 'react';
+import { Bell, BellOff, BellRing, Loader2, MonitorCheck, Play, Volume2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/shared/ui';
 import { playChatCompletionSound } from '@/shared/utils';
+import {
+  getBrowserNotifyPermission,
+  isBrowserNotifyEnabled,
+  isBrowserNotifyOnlyBackground,
+  notifyBrowser,
+  requestBrowserNotifyPermission,
+  setBrowserNotifyEnabled,
+  setBrowserNotifyOnlyBackground,
+} from '@/shared/browserNotify';
 import type { NotificationPreferencesState } from '@/shared/types';
 
 type NotificationsSettingsTabProps = {
@@ -43,6 +53,26 @@ export default function NotificationsSettingsTab({
 
   const pushSupported = pushPermission !== 'unsupported';
   const pushDenied = pushPermission === 'denied';
+
+  // DHC CLI: in-page browser notifications (no push service needed; works while a tab is open).
+  const [browserPermission, setBrowserPermission] = useState(() => getBrowserNotifyPermission());
+  const [browserEnabled, setBrowserEnabled] = useState(() => isBrowserNotifyEnabled());
+  const [onlyBackground, setOnlyBackground] = useState(() => isBrowserNotifyOnlyBackground());
+  const browserSupported = browserPermission !== 'unsupported';
+  const browserOn = browserEnabled && browserPermission === 'granted';
+  const toggleBrowser = async () => {
+    if (browserOn) {
+      setBrowserNotifyEnabled(false);
+      setBrowserEnabled(false);
+      return;
+    }
+    const permission = await requestBrowserNotifyPermission();
+    setBrowserPermission(permission);
+    if (permission === 'granted') {
+      setBrowserNotifyEnabled(true);
+      setBrowserEnabled(true);
+    }
+  };
 
   return (
     <div className="space-y-6 md:space-y-8">
@@ -149,6 +179,70 @@ export default function NotificationsSettingsTab({
           )}
         </div>
       )}
+
+      <div className="space-y-4 rounded-lg border border-border bg-card p-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <MonitorCheck className="h-4 w-4 text-blue-600" />
+            <h4 className="font-medium text-foreground">{t('notifications.browser.title', { defaultValue: '瀏覽器通知（分頁開著時）' })}</h4>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {t('notifications.browser.description', { defaultValue: '不經推播服務，只要這個分頁還開著就會跳系統通知。適合分頁被切到後面或縮小的時候。' })}
+          </p>
+        </div>
+        {!browserSupported ? (
+          <p className="text-sm text-muted-foreground">{t('notifications.browser.unsupported', { defaultValue: '此瀏覽器不支援通知。' })}</p>
+        ) : browserPermission === 'denied' ? (
+          <p className="text-sm text-muted-foreground">{t('notifications.browser.denied', { defaultValue: '通知已被瀏覽器封鎖，請在網址列左邊的網站設定裡允許。' })}</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => { void toggleBrowser(); }}
+                className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+                  browserOn
+                    ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50'
+                    : 'bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600'
+                }`}
+              >
+                {browserOn ? <BellOff className="h-4 w-4" /> : <BellRing className="h-4 w-4" />}
+                {browserOn
+                  ? t('notifications.browser.disable', { defaultValue: '關閉瀏覽器通知' })
+                  : t('notifications.browser.enable', { defaultValue: '啟用瀏覽器通知' })}
+              </button>
+              {browserOn && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    notifyBrowser({ kind: 'stop', title: 'DHC CLI 測試通知', body: t('notifications.browser.testBody', { defaultValue: '通知會長這樣。點一下會回到對應的 session。' }), force: true });
+                  }}
+                >
+                  <Play className="h-4 w-4" />
+                  {t('notifications.browser.test', { defaultValue: '測試通知' })}
+                </Button>
+              )}
+            </div>
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={onlyBackground}
+                onChange={(event) => {
+                  setBrowserNotifyOnlyBackground(event.target.checked);
+                  setOnlyBackground(event.target.checked);
+                }}
+                className="h-4 w-4"
+              />
+              {t('notifications.browser.onlyBackground', { defaultValue: '只在分頁不在前景時通知（正在看的時候不吵）' })}
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {t('notifications.browser.eventsHint', { defaultValue: '通知哪些事件，用下面「事件類型」的勾選。' })}
+            </p>
+          </div>
+        )}
+      </div>
 
       <div className="space-y-4 rounded-lg border border-border bg-card p-4">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

@@ -4,9 +4,11 @@ import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
+import { fallbackTitle } from '@/modules/providers/list/claude/auto-session-title.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
 import type {
+  BackgroundWorkReport,
   FetchHistoryOptions,
   FetchHistoryResult,
   LLMProvider,
@@ -64,11 +66,12 @@ type SessionDetails = {
   } | null;
 };
 
-const MAX_CLOUDCLI_SESSION_NAME_WORDS = 4;
-
+/**
+ * DHC CLI 10/13: a new session is named with a short phrase from its first message (greetings, links and code
+ * left out) instead of its first words; Claude Code's own title replaces it once there is one.
+ */
 function buildCloudCliSessionName(initialMessage: string): string {
-  const words = initialMessage.trim().split(/\s+/).filter(Boolean);
-  return words.slice(0, MAX_CLOUDCLI_SESSION_NAME_WORDS).join(' ') || 'Untitled Session';
+  return fallbackTitle(initialMessage);
 }
 
 /**
@@ -137,6 +140,19 @@ export const sessionsService = {
     lastSeq: number;
   }> {
     return chatRunRegistry.listRunningRuns();
+  },
+
+  /**
+   * DHC CLI: sessions whose turn is over but whose CLI is still working — background subagents or shells,
+   * or the follow-up turn it starts when they report back. Status-only, like `listRunningSessions`.
+   */
+  listBackgroundSessions(): ReturnType<typeof chatRunRegistry.listBackgroundWork> {
+    return chatRunRegistry.listBackgroundWork();
+  },
+
+  /** DHC CLI: records one CLI process's after-turn work for a session (`null` clears it). */
+  reportBackgroundWork(appSessionId: string, owner: object, work: BackgroundWorkReport | null): void {
+    chatRunRegistry.setBackgroundWork(appSessionId, owner, work);
   },
 
   /**

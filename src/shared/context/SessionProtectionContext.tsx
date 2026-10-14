@@ -12,6 +12,9 @@ import {
 } from '@/shared/hooks/useSessionProtection';
 import type { IsSessionProcessing, MarkSessionIdle, MarkSessionProcessing, SessionActivityMap, SyncProcessingSessions } from '@/shared/types';
 import { api } from '@/shared/api';
+import { setBackgroundWork } from '@/shared/backgroundWork';
+import { setWaitingFromServer } from '@/shared/waitingOnYou';
+import { refreshNightQueueMarks } from '@/shared/nightQueueMarks';
 
 type RunningSessionApiItem = {
   sessionId?: unknown;
@@ -23,6 +26,10 @@ type RunningSessionApiItem = {
 type RunningSessionsApiPayload = {
   data?: {
     sessions?: RunningSessionApiItem[];
+    /** DHC CLI: sessions whose CLI still works after the turn (servers before 2026-10-01 omit it). */
+    background?: unknown;
+    /** DHC CLI: prompts waiting on a person, `{ sessionId, requestId, toolName }[]` (servers before 2026-10-12 omit it). */
+    waiting?: unknown;
   };
 };
 
@@ -90,6 +97,8 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
 
       const payload = (await response.json()) as RunningSessionsApiPayload;
       const sessions = Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
+      setBackgroundWork(payload.data?.background);
+      setWaitingFromServer(payload.data?.waiting);
 
       syncProcessingSessions(
         sessions
@@ -123,6 +132,21 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
 
     return () => window.clearInterval(interval);
   }, [refreshRunningSessions]);
+
+  // DHC CLI: the sidebar's moons. Once a minute; a server without the list route is asked every 10 minutes.
+  useEffect(() => {
+    let alive = true;
+    let timer: number | undefined;
+    const tick = async () => {
+      const supported = await refreshNightQueueMarks();
+      if (alive) timer = window.setTimeout(() => void tick(), supported ? 60_000 : 600_000);
+    };
+    void tick();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const actions = useMemo<SessionProtectionActions>(
     () => ({

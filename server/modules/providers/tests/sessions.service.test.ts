@@ -37,7 +37,7 @@ test('provider session id returns the mapped native id', { concurrency: false },
   });
 });
 
-test('app session names use at most four whole words from the initial message', { concurrency: false }, async () => {
+test('app session names are a short phrase from the first line of the initial message', { concurrency: false }, async () => {
   await withIsolatedDatabase(() => {
     const result = sessionsService.createAppSession(
       'codex',
@@ -45,10 +45,11 @@ test('app session names use at most four whole words from the initial message', 
       '  supercalifragilisticexpialidocious\nsecond   third fourth fifth  ',
     );
 
-    assert.equal(result.sessionName, 'supercalifragilisticexpialidocious second third fourth');
+    // DHC CLI 10/13: the first line, tidied; the full naming rules are in auto-session-title.test.ts.
+    assert.equal(result.sessionName, 'supercalifragilisticexpialidocious');
     assert.equal(
       sessionsDb.getSessionById(result.sessionId)?.custom_name,
-      'supercalifragilisticexpialidocious second third fourth',
+      'supercalifragilisticexpialidocious',
     );
   });
 });

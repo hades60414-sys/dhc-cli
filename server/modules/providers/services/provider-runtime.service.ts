@@ -21,6 +21,7 @@ type ProviderRuntimeServiceDependencies = {
     requestedModel?: string | null,
   ): Promise<string | undefined>;
   getProviderModels: typeof providerModelsService.getProviderModels;
+  reportBackgroundWork: NonNullable<ProviderRuntimeContext['reportBackgroundWork']>;
 };
 
 const defaultDependencies: ProviderRuntimeServiceDependencies = {
@@ -30,6 +31,8 @@ const defaultDependencies: ProviderRuntimeServiceDependencies = {
   resolveResumeModel: (provider, sessionId, requestedModel) =>
     providerModelsService.resolveResumeModel(provider, sessionId, requestedModel),
   getProviderModels: (provider) => providerModelsService.getProviderModels(provider),
+  reportBackgroundWork: (appSessionId, owner, work) =>
+    sessionsService.reportBackgroundWork(appSessionId, owner, work),
 };
 
 /**
@@ -52,6 +55,7 @@ export function createProviderRuntimeService(
       dependencies.resolveResumeModel(provider.id, sessionId, requestedModel),
     getProviderModels: async () => dependencies.getProviderModels(provider.id),
     normalizeMessage: (raw, sessionId) => provider.sessions.normalizeMessage(raw, sessionId),
+    reportBackgroundWork: dependencies.reportBackgroundWork,
     async isProviderInstalled() {
       try {
         return (await provider.auth.getStatus()).installed;

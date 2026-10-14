@@ -121,21 +121,22 @@ const getProjectLastActivity = (project: Project): Date => {
 export const sortProjects = (
   projects: Project[],
   projectSortOrder: ProjectSortOrder,
+  // DHC：這台裝置設定檔綁定的專案固定排第一（比收藏還前面）。
+  topProjectId: string | null = null,
 ): Project[] => {
   const byName = [...projects];
 
   byName.sort((projectA, projectB) => {
-    // Star order now comes from backend `projects.isStarred`.
-    const aStarred = Boolean(projectA.isStarred);
-    const bStarred = Boolean(projectB.isStarred);
-
-    if (aStarred && !bStarred) {
-      return -1;
+    if (topProjectId && projectA.projectId !== projectB.projectId) {
+      if (projectA.projectId === topProjectId) {
+        return -1;
+      }
+      if (projectB.projectId === topProjectId) {
+        return 1;
+      }
     }
 
-    if (!aStarred && bStarred) {
-      return 1;
-    }
+    // DHC：專案不再有收藏（收藏改在 session），舊的專案星號不影響排序。
 
     if (projectSortOrder === 'date') {
       return getProjectLastActivity(projectB).getTime() - getProjectLastActivity(projectA).getTime();

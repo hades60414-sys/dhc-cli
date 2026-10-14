@@ -8,10 +8,17 @@ import { useSidebarController } from '@/modules/sidebar/hooks/useSidebarControll
 import { useTaskMaster, useTasksSettings } from '@/modules/task-master';
 import { usePaletteOps } from '@/modules/command-palette';
 import { useBusySessionIdSet } from '@/shared/context/SessionProtectionContext';
+import { startSessionBoxesSync } from '@/shared/sessionBoxes';
+import { startCoSessionsSync } from '@/shared/coSessions';
+import { startFlashSessionsSync } from '@/shared/flashTasks';
+import { startDistillSessionsSync } from '@/shared/distillSessions';
 import type { LLMProvider, LoadingProgress, MCPServerStatus, Project, ProjectSession, SidebarProjectListProps } from '@/shared/types';
 import SidebarCollapsed from '@/modules/sidebar/SidebarCollapsed';
 import SidebarContent from '@/modules/sidebar/SidebarContent';
 import SidebarModals from '@/modules/sidebar/SidebarModals';
+import CoShareDialog from '@/modules/sidebar/CoShareDialog';
+import CoInviteCard from '@/modules/sidebar/CoInviteCard';
+import TeamOnly from '@/shared/TeamOnly';
 
 type SidebarProps = {
   projects: Project[];
@@ -77,6 +84,12 @@ function Sidebar({
   // Only membership is rendered here, so subscribing to the full activity map
   // would re-render the whole tree on every provider status frame.
   const activeSessions = useBusySessionIdSet();
+
+  // DHC CLI 收納盒: the sidebar stays mounted (a drawer on mobile), so it owns loading the boxes.
+  useEffect(() => startSessionBoxesSync(), []);
+  useEffect(() => startFlashSessionsSync(), []);
+  useEffect(() => startDistillSessionsSync(), []);
+  useEffect(() => startCoSessionsSync(), []);
 
   const {
     isSidebarCollapsed,
@@ -202,7 +215,9 @@ function Sidebar({
     loadingMoreProjects,
     activeSessions,
     attentionSessionIds,
+    // DHC CLI 10/06: query projects start collapsed so the 查詢 tab reads as a list of zones.
     forceExpanded: searchMode === 'running',
+    runningOnly: searchMode === 'running',
     isProjectStarred,
     onRenameDraftChange: updateRenameDraft,
     onToggleProject: toggleProject,
@@ -245,6 +260,10 @@ function Sidebar({
         installMode={installMode}
         t={t}
       />
+      <TeamOnly>
+        <CoShareDialog projects={projects} onRenamed={onRefresh} />
+        <CoInviteCard projects={projects} selectedSession={selectedSession} />
+      </TeamOnly>
 
       {isSidebarCollapsed ? (
         <SidebarCollapsed

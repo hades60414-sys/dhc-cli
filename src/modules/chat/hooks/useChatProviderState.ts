@@ -41,6 +41,29 @@ const PROVIDERS: LLMProvider[] = ['claude', 'cursor', 'codex', 'opencode'];
 const providerModelStorageKey = (provider: LLMProvider): string => `${provider}-model`;
 
 /**
+ * DHC CLI: the server catalog labels the Opus aliases just "Opus", which does not say which Opus
+ * runs. Map each alias to the model the installed Claude Code resolves it to; update these labels
+ * whenever Claude Code is upgraded.
+ */
+const CLAUDE_VERSIONED_LABELS = new Map<string, string>([
+  ['opus', 'Opus 5.5'],
+  ['opus[1m]', 'Opus 5.5 (1M context)'],
+]);
+
+const withClaudeVersionLabels = (
+  provider: LLMProvider,
+  definition: ProviderModelsDefinition,
+): ProviderModelsDefinition => (provider === 'claude'
+  ? {
+    ...definition,
+    OPTIONS: definition.OPTIONS.map((option) => {
+      const label = CLAUDE_VERSIONED_LABELS.get(option.value);
+      return label ? { ...option, label } : option;
+    }),
+  }
+  : definition);
+
+/**
  * Fallback permission-mode matrix used only until the backend capability
  * matrix (`GET /api/providers/capabilities`) has loaded. The backend is the
  * source of truth; this mirror exists so the composer renders sensibly on
@@ -217,7 +240,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
           return;
         }
 
-        nextCatalog[p] = entry;
+        nextCatalog[p] = withClaudeVersionLabels(p, entry);
       });
 
       setProviderModelCatalog(nextCatalog);
@@ -713,7 +736,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   ) => {
     setProviderModelCatalog((previous) => ({
       ...previous,
-      [targetProvider]: models,
+      [targetProvider]: withClaudeVersionLabels(targetProvider, models),
     }));
   }, []);
 

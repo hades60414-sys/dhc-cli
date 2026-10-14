@@ -2,6 +2,7 @@ import { sessionsDb } from '@/modules/database/index.js';
 import { ChatSessionWriter } from '@/modules/websocket/services/chat-session-writer.service.js';
 import { broadcastSessionUpserted } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
 import type {
+  BackgroundWorkReport,
   LLMProvider,
   NormalizedMessage,
   RealtimeClientConnection,
@@ -59,6 +60,31 @@ const MAX_BUFFERED_EVENTS_PER_RUN = 5000;
  */
 const runs = new Map<string, ChatRun>();
 
+// DHC CLI: listeners told whenever a run flips to `completed` (natural end, crash or abort), so a queued
+// message can go out right away instead of waiting for the dispatcher's next 30-second poll.
+const runCompletedListeners = new Set<(appSessionId: string) => void>();
+
+/**
+ * DHC CLI: work a provider CLI keeps doing after its turn reported `complete` — background subagents and
+ * shells, plus the follow-up turn the CLI starts on its own when they report back. The sidebar keeps a light
+ * on for these sessions. Kept apart from `runs` because a completed run is evicted after five minutes and
+ * background work can run far longer. Each CLI process reports under its own owner key, so a process still
+ * winding down after a newer turn took over cannot clear the newer process's work.
+ */
+const backgroundWork = new Map<string, Map<object, BackgroundWorkReport>>();
+
+function notifyRunCompleted(appSessionId: string): void {
+  for (const listener of runCompletedListeners) {
+    queueMicrotask(() => {
+      try {
+        listener(appSessionId);
+      } catch (error) {
+        console.error('[ChatRunRegistry] run-completed listener failed', error);
+      }
+    });
+  }
+}
+
 function evictRunLater(appSessionId: string): void {
   const timer = setTimeout(() => {
     const run = runs.get(appSessionId);
@@ -105,6 +131,7 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     run.status = 'completed';
     run.completedAt = Date.now();
     evictRunLater(run.appSessionId);
+    notifyRunCompleted(run.appSessionId);
   }
 
   run.events.push(outbound);
@@ -233,6 +260,36 @@ export const chatRunRegistry = {
       }));
   },
 
+  /** DHC CLI: records (or with `null`, clears) one CLI process's after-turn work for a session. */
+  setBackgroundWork(appSessionId: string, owner: object, work: BackgroundWorkReport | null): void {
+    const owners = backgroundWork.get(appSessionId);
+    if (!work) {
+      owners?.delete(owner);
+      if (owners?.size === 0) {
+        backgroundWork.delete(appSessionId);
+      }
+      return;
+    }
+    if (owners) {
+      owners.set(owner, work);
+    } else {
+      backgroundWork.set(appSessionId, new Map([[owner, work]]));
+    }
+  },
+
+  /** DHC CLI: sessions with after-turn work, one entry per session across its CLI processes. */
+  listBackgroundWork(): Array<{ sessionId: string } & BackgroundWorkReport> {
+    return Array.from(backgroundWork, ([sessionId, owners]) => {
+      const states = Array.from(owners.values());
+      return {
+        sessionId,
+        tasks: states.flatMap((state) => state.tasks),
+        followUp: states.some((state) => state.followUp),
+        since: Math.min(...states.map((state) => state.since)),
+      };
+    });
+  },
+
   /**
    * Adds a websocket connection to a run's live audience.
    *
@@ -301,10 +358,20 @@ export const chatRunRegistry = {
     run.writer.sendComplete(opts);
   },
 
+  /** DHC CLI: subscribes to run completion; returns the unsubscribe function. */
+  onRunCompleted(listener: (appSessionId: string) => void): () => void {
+    runCompletedListeners.add(listener);
+    return () => {
+      runCompletedListeners.delete(listener);
+    };
+  },
+
   /**
    * Test-only escape hatch: clears every tracked run.
    */
   clearAll(): void {
     runs.clear();
+    runCompletedListeners.clear();
+    backgroundWork.clear();
   },
 };

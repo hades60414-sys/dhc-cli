@@ -443,7 +443,18 @@ export type ProviderRuntimeContext = {
   getProviderModels(): Promise<ProviderModelsDefinition>;
   normalizeMessage(raw: unknown, sessionId: string | null): NormalizedMessage[];
   isProviderInstalled(): Promise<boolean>;
+  /**
+   * DHC CLI: reports what the CLI is still doing after its turn completed (`null` clears it), so the
+   * sidebar can keep a light on. `owner` tells apart the CLI processes of one session.
+   */
+  reportBackgroundWork?(appSessionId: string, owner: object, work: BackgroundWorkReport | null): void;
 };
+
+/** DHC CLI: one background task (subagent, shell, ...) a provider CLI still runs after its turn completed. */
+export type BackgroundTaskReport = { type: string; description: string };
+
+/** DHC CLI: one CLI process's after-turn work — its live background tasks and the follow-up turn they start. */
+export type BackgroundWorkReport = { tasks: BackgroundTaskReport[]; followUp: boolean; since: number };
 
 export type ProviderRunFunction = (
   command: string,

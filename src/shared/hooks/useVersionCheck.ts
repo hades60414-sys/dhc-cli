@@ -57,6 +57,8 @@ export const useVersionCheck = (owner: string, repo: string) => {
 
   useEffect(() => {
     const checkVersion = async () => {
+      // DHC CLI: internal build — never phone GitHub for release checks; updates are done on the host by hand.
+      if (owner === 'siteboon') return;
       try {
         const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);
         const data = await response.json();

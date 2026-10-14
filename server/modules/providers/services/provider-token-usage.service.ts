@@ -147,15 +147,11 @@ function findCodexTokenUsage(fileContent: string): TokenUsageResult | null {
         continue;
       }
 
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let totalTokens = 0;
-      if (tokenInfo.total_token_usage) {
-        inputTokens = readUsageNumber(tokenInfo.total_token_usage.input_tokens);
-        outputTokens = readUsageNumber(tokenInfo.total_token_usage.output_tokens);
-        totalTokens = readUsageNumber(tokenInfo.total_token_usage.total_tokens)
-          || inputTokens + outputTokens;
-      }
+      // Cumulative usage counts the same prompt repeatedly across requests.
+      const usage = tokenInfo.last_token_usage;
+      const inputTokens = readUsageNumber(usage?.input_tokens);
+      const outputTokens = readUsageNumber(usage?.output_tokens);
+      const totalTokens = readUsageNumber(usage?.total_tokens) || inputTokens + outputTokens;
       return {
         used: totalTokens,
         total: readUsageNumber(tokenInfo.model_context_window) || 200_000,

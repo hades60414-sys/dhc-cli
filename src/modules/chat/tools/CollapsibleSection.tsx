@@ -3,6 +3,7 @@ import React from 'react';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import { useIsExportingTranscript } from '@/modules/chat/context/TranscriptRenderContext';
+import { looksLikePath, splitPathForDisplay } from '@/modules/chat/utils/pathDisplay';
 
 type CollapsibleSectionProps = {
   title: string;
@@ -56,12 +57,26 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
           {toolName && (
             <span className="flex-shrink-0 text-[10px] text-muted-foreground/40">/</span>
           )}
-          <button
-            onClick={onTitleClick}
-            className="flex-1 truncate text-left font-mono text-primary transition-colors hover:text-primary/80 hover:underline"
-          >
-            {title}
-          </button>
+          {/* DHC CLI UI night 3: file name first, last two folders dimmed; whole path in the tooltip. */}
+          {(() => {
+            const titleText = typeof title === 'string' ? title : '';
+            const isPath = titleText ? looksLikePath(titleText) : false;
+            const parts = isPath ? splitPathForDisplay(titleText) : null;
+            return (
+              <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                <button
+                  onClick={onTitleClick}
+                  className="truncate text-left font-mono text-primary transition-colors hover:text-primary/80 hover:underline"
+                  title={titleText || undefined}
+                >
+                  {parts ? parts.name : title}
+                </button>
+                {parts?.parentHint && (
+                  <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/50" title={titleText}>{parts.parentHint}</span>
+                )}
+              </span>
+            );
+          })()}
           {badge && <span className="ml-auto flex-shrink-0">{badge}</span>}
           {action && <span className="ml-1 flex-shrink-0">{action}</span>}
         </div>

@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
 import type { ServerEvent,MarkSessionIdle,MarkSessionProcessing,PendingPermissionRequest,ProjectSession,LLMProvider,NormalizedMessage } from '@/shared/types';
-import { showCompletionTitleIndicator } from '@/modules/chat/utils/pageTitleNotification';
 import { playChatCompletionSound, playNotificationSound } from '@/shared/utils';
+import { serverNow } from '@/shared/serverClock';
+import { consumeInterruptSend } from '@/modules/chat/utils/interruptSends';
 import type { SessionStore } from '@/modules/chat/hooks/useSessionStore';
 
 const isActionablePermissionRequest = (request: { toolName?: unknown } | null | undefined): boolean => {
@@ -163,10 +164,13 @@ export function useChatRealtimeHandlers({
             sessionStore.appendRealtime(sid, {
               id: `protocol_error_${Date.now()}`,
               sessionId: sid,
-              timestamp: new Date().toISOString(),
+              timestamp: new Date(serverNow()).toISOString(), // DHC CLI: sorted among host-stamped rows
               provider,
               kind: 'error',
-              content: String(msg.error || 'Request failed'),
+              // DHC CLI: the raw text is English with the session UUID; say what happened and what to do.
+              content: msg.code === 'RUN_IN_PROGRESS'
+                ? '上一則還在處理中，這則沒有送出。等回覆完成後再送一次。'
+                : String(msg.error || 'Request failed'),
             } as NormalizedMessage);
           }
           return;
@@ -246,6 +250,16 @@ export function useChatRealtimeHandlers({
           }
           accumulatedStreamRef.current = '';
 
+          // DHC CLI: this `complete` closes the turn our own "send now" just interrupted; the replacement
+          // turn is already on its way, so the indicator stays up instead of blinking off and on.
+          if (msg.aborted && sid && consumeInterruptSend(sid)) {
+            if (sid === activeViewSessionId) {
+              pendingPermissionRequestsRef.current = [];
+              setPendingPermissionRequests([]);
+            }
+            break;
+          }
+
           // `complete` is the unified terminal event — every provider run ends
           // with exactly one, regardless of success, failure, or abort. The
           // indicator derives from the processing map, so deleting the entry
@@ -263,8 +277,8 @@ export function useChatRealtimeHandlers({
           }
 
           // Celebrate only successful runs (failed runs end with success: false).
+          // DHC CLI: the old "[Done]" title prefix is replaced by the "(N)" unread count kept in useProjectsState.
           if (msg.success !== false) {
-            showCompletionTitleIndicator();
             void playChatCompletionSound();
           }
 
@@ -333,6 +347,10 @@ export function useChatRealtimeHandlers({
             if (sid === activeViewSessionId) {
               setTokenBudget(msg.tokenBudget as Record<string, unknown>);
             }
+          } else if ((msg.text === 'compacting' || msg.text === 'compacting_done') && sid) {
+            onSessionProcessing?.(sid, {
+              statusText: msg.text === 'compacting' ? '正在壓縮上下文' : null,
+            });
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {
               statusText: msg.text as string,

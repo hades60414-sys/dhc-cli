@@ -1,4 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useProjectCommandState } from '@/modules/project-workspace';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+// DHC CLI D1: the one-click "review what you just changed" prompt (logic, numbers, safety — not style).
+const REVIEW_OWN_CHANGES_PROMPT = '請審查你在這個 session 到目前為止改過的所有檔案（用 git diff 或你自己的修改紀錄找出來）。只找三類問題：邏輯錯誤、數字或計算錯誤、安全與資料風險（例如會覆蓋或刪除資料、少了防呆）。不要管程式風格與命名。每個問題列出檔案、行號、一句話說明、建議修法；確定沒有問題就明說沒有，不要硬找。';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
@@ -6,6 +10,19 @@ import { useTasksSettings } from '@/modules/task-master';
 import { useWebSocket } from '@/shared/context/WebSocketContext';
 import PermissionContext from '@/modules/chat/context/PermissionContext';
 import { api } from '@/shared/api';
+import { takeAutoStart } from '@/shared/autoStartChat';
+import { fileNewSessionIntoBox } from '@/shared/sessionBoxes';
+import { hasTodoChatDrag, readTodoChatDrag, todoFocusText, todoPlanPrompt } from '@/shared/todoChatDrag';
+import type { TodoChatPayload } from '@/shared/todoChatDrag';
+import { fileNewSessionFlash, setNewSessionFlash, setSessionFlash, useIsFlashSession, useNewSessionFlash } from '@/shared/flashTasks';
+import {
+  DISTILL_SYSTEM_NOTE,
+  fileNewSessionDistill,
+  setNewSessionDistill,
+  setSessionDistill,
+  useIsDistillSession,
+  useNewSessionDistill,
+} from '@/shared/distillSessions';
 import type {
   ChatMessage,
   Project,
@@ -15,6 +32,7 @@ import type {
 } from '@/shared/types';
 import { useChatProviderState } from '@/modules/chat/hooks/useChatProviderState';
 import { useScheduledMessages } from '@/modules/chat/composer/useScheduledMessages';
+import { useNightQueue } from '@/modules/chat/composer/useNightQueue';
 import { useChatSessionState } from '@/modules/chat/hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '@/modules/chat/hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '@/modules/chat/hooks/useChatComposerState';
@@ -143,6 +161,7 @@ function ChatInterface({
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
+    loadOlderMessagesNow,
     loadAllMessages,
     loadFullTranscript,
     allMessagesLoaded,
@@ -177,8 +196,48 @@ function ChatInterface({
   const handleSessionEstablished = useCallback<NonNullable<ChatInterfaceProps['onSessionEstablished']>>((sessionId, context) => {
     setCurrentSessionId(sessionId);
     onSessionEstablished?.(sessionId, context);
+    fileNewSessionIntoBox(context.project.projectId, sessionId); // DHC CLI 收納盒 picked before the first send
+    fileNewSessionFlash(context.project.projectId, sessionId); // DHC CLI ⚡ pressed before the first send
+    fileNewSessionDistill(context.project.projectId, sessionId); // DHC CLI 蒸餾模式 flask pressed before the first send
     onNavigateToSession?.(sessionId);
   }, [setCurrentSessionId, onSessionEstablished, onNavigateToSession]);
+
+  const { handleNewSession } = useProjectCommandState(); // DHC CLI: for /clear
+
+  // DHC CLI: night mode — this chat's prompts are held on the server and run one at a time from 02:00.
+  const { controls: nightQueue, enqueue: enqueueNightPrompt } = useNightQueue(
+    currentSessionId || selectedSession?.id || null,
+    selectedProject ? `project:${selectedProject.projectId}` : null,
+    permissionMode,
+  );
+
+  // DHC CLI 快閃任務: the ⚡ marks this session (or, before the first send, the next new one in this project).
+  const flashSessionId = currentSessionId || selectedSession?.id || null;
+  const flashProjectId = selectedProject?.projectId ?? null;
+  const sessionIsFlash = useIsFlashSession(flashSessionId, selectedProject);
+  const newSessionIsFlash = useNewSessionFlash(flashProjectId);
+  const flashTask = {
+    enabled: flashSessionId ? sessionIsFlash : newSessionIsFlash,
+    onToggle: () => {
+      if (flashSessionId) void setSessionFlash(flashSessionId, !sessionIsFlash);
+      else if (flashProjectId) setNewSessionFlash(flashProjectId, !newSessionIsFlash);
+    },
+  };
+
+  // DHC CLI 蒸餾模式: the flask marks a session the same way. Only the Claude runtime reads the system-prompt
+  // append that carries the note, so other providers don't get the button.
+  const sessionIsDistill = useIsDistillSession(flashSessionId);
+  const newSessionIsDistill = useNewSessionDistill(flashProjectId);
+  const distillTask = provider === 'claude'
+    ? {
+        enabled: flashSessionId ? sessionIsDistill : newSessionIsDistill,
+        onToggle: () => {
+          if (flashSessionId) void setSessionDistill(flashSessionId, !sessionIsDistill);
+          else if (flashProjectId) setNewSessionDistill(flashProjectId, !newSessionIsDistill);
+        },
+      }
+    : undefined;
+  const distillMode = Boolean(distillTask?.enabled);
 
   const {
     input,
@@ -208,6 +267,8 @@ function ChatInterface({
     isDragActive,
     openAttachmentPicker,
     handleSubmit,
+    queueMessage,
+    submitText,
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
@@ -231,6 +292,8 @@ function ChatInterface({
     beginEditMessage,
     cancelEditMessage,
   } = useChatComposerState({
+    onClearConversation: () => { if (selectedProject) handleNewSession(selectedProject); },
+    onReviewChanges: () => reviewChangesRef.current(),
     selectedProject,
     selectedSession,
     currentSessionId,
@@ -242,6 +305,10 @@ function ChatInterface({
     isLoading: isProcessing,
     processingSessions,
     canAbortSession,
+    pendingPermissionRequests,
+    nightMode: nightQueue.enabled,
+    onNightQueueSubmit: enqueueNightPrompt,
+    distillMode,
     tokenBudget,
     sendMessage,
     sendByCtrlEnter,
@@ -260,6 +327,110 @@ function ChatInterface({
   // while Chat is hidden), then re-subscribe — the
   // `chat_subscribed` ack restores or clears the activity indicator, replays
   // missed live events, and re-attaches a still-running stream to this socket.
+  // DHC CLI: /clear (alias /new) behaves like Claude Code's /clear - start a fresh conversation in this project.
+  // DHC CLI: "N 則新訊息" on the jump-to-bottom button. The moment the user scrolls up we remember the
+  // newest row's stamp; anything from the assistant newer than that is what they have not seen yet.
+  const [scrolledUpSince, setScrolledUpSince] = useState<number | null>(null);
+  const reviewChangesRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!isUserScrolledUp) {
+      setScrolledUpSince(null);
+      return;
+    }
+    setScrolledUpSince((previous) => {
+      if (previous !== null) return previous;
+      const last = chatMessages[chatMessages.length - 1];
+      const stamp = last ? new Date(last.timestamp).getTime() : NaN;
+      return Number.isFinite(stamp) ? stamp : Date.now();
+    });
+  }, [isUserScrolledUp, chatMessages]);
+  const newMessageCount = useMemo(() => {
+    if (!isUserScrolledUp || scrolledUpSince === null) return 0;
+    return chatMessages.filter((message) => {
+      if (message.type === 'user' || message.isToolUse || message.isThinking) return false;
+      const stamp = new Date(message.timestamp).getTime();
+      return Number.isFinite(stamp) && stamp > scrolledUpSince;
+    }).length;
+  }, [isUserScrolledUp, scrolledUpSince, chatMessages]);
+
+  // DHC CLI D1: /review runs through the hook's submitText, which only exists after the hook returns.
+  reviewChangesRef.current = () => { void submitText(REVIEW_OWN_CHANGES_PROMPT); };
+
+  // DHC CLI A1/E1: the tool currently running (last tool call still without a result) and when it
+  // started, so the activity indicator can say "Bash 已 45秒" and flag one that looks stuck.
+  const runningTool = useMemo(() => {
+    if (!isProcessing) return null;
+    for (let i = chatMessages.length - 1; i >= 0; i -= 1) {
+      const message = chatMessages[i];
+      if (message.type === 'user') break;
+      if (message.isToolUse && !message.toolResult) {
+        const startedAt = new Date(message.timestamp).getTime();
+        return { name: message.toolName || 'tool', startedAt: Number.isFinite(startedAt) ? startedAt : Date.now() };
+      }
+    }
+    return null;
+  }, [isProcessing, chatMessages]);
+
+  // DHC CLI 10/08: a todo dropped from the dock. An empty conversation switches to plan mode and sends a planning
+  // turn about the task; an existing one gets a "focus on this" line appended to the composer, not sent.
+  const [todoDragOver, setTodoDragOver] = useState(false);
+  const pendingPlanPromptRef = useRef<string | null>(null);
+  const isEmptyConversation = !selectedSession?.id && !currentSessionId && chatMessages.length === 0;
+  const handleTodoDrop = useCallback((payload: TodoChatPayload) => {
+    if (isEmptyConversation) {
+      const prompt = todoPlanPrompt(payload);
+      if (permissionMode === 'plan') {
+        void submitText(prompt);
+      } else if (availablePermissionModes.includes('plan')) {
+        // Sent from the effect below, once the send options carry plan mode.
+        pendingPlanPromptRef.current = prompt;
+        selectPermissionMode('plan');
+      } else {
+        setInput(prompt);
+        textareaRef.current?.focus();
+      }
+      return;
+    }
+    const focus = todoFocusText(payload);
+    const base = input.trimEnd();
+    setInput(base ? `${base}
+${focus}` : focus);
+    textareaRef.current?.focus();
+  }, [availablePermissionModes, input, isEmptyConversation, permissionMode, selectPermissionMode, setInput, submitText, textareaRef]);
+  useEffect(() => {
+    const prompt = pendingPlanPromptRef.current;
+    if (!prompt || permissionMode !== 'plan') return;
+    pendingPlanPromptRef.current = null;
+    void submitText(prompt);
+  }, [permissionMode, submitText]);
+  // DHC CLI 10/13: 規劃白板「開工」 opens a new chat here and leaves its brief to be sent as the first turn.
+  useEffect(() => {
+    if (!isEmptyConversation) return;
+    const prompt = takeAutoStart(selectedProject?.projectId);
+    if (prompt) void submitText(prompt);
+  }, [isEmptyConversation, selectedProject?.projectId, submitText]);
+  useEffect(() => {
+    if (!todoDragOver) return;
+    const clear = () => setTodoDragOver(false);
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    return () => {
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+    };
+  }, [todoDragOver]);
+
+  const handleComposerSubmit = useCallback((event: Parameters<typeof handleSubmit>[0]) => {
+    const cmd = input.trim().toLowerCase();
+    if ((cmd === '/clear' || cmd === '/new') && selectedProject) {
+      event.preventDefault();
+      setInput('');
+      handleNewSession(selectedProject);
+      return;
+    }
+    return handleSubmit(event);
+  }, [input, selectedProject, setInput, handleNewSession, handleSubmit]);
+
   const handleWebSocketReconnect = useCallback(async () => {
     if (!selectedProject || !selectedSession) return;
     await requestLatestMessages(selectedSession.id, isActive);
@@ -272,6 +443,16 @@ function ChatInterface({
       }],
     });
   }, [isActive, requestLatestMessages, selectedProject, selectedSession, sendMessage]);
+
+  // DHC CLI: a night-queue prompt the server started in this chat ("run now", or 02:00 with the page open)
+  // runs with no browser attached. Attach to it the way a reconnect does, so it streams here.
+  const runningNightItemId = nightQueue.items.find((item) => item.status === 'running')?.id ?? null;
+  const attachedNightItemRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runningNightItemId || attachedNightItemRef.current === runningNightItemId) return;
+    attachedNightItemRef.current = runningNightItemId;
+    void handleWebSocketReconnect();
+  }, [handleWebSocketReconnect, runningNightItemId]);
 
   useChatRealtimeHandlers({
     isActive,
@@ -312,6 +493,24 @@ function ChatInterface({
       document.removeEventListener('keydown', handleGlobalEscape, { capture: true });
     };
   }, [canAbortSession, handleAbortSession]);
+
+  // DHC CLI 10/13: a bare Enter while nothing editable or clickable has focus jumps into the composer,
+  // so the keyboard alone gets back to typing. Dialogs, buttons, links and other fields keep their own Enter.
+  useEffect(() => {
+    if (!isActive) return;
+    const handleEnterToComposer = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing) return;
+      if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, button, a[href], [contenteditable=""], [contenteditable="true"], [role="button"], [role="dialog"], [role="menu"], [role="listbox"], [tabindex]:not([tabindex="-1"])')) return;
+      const textarea = textareaRef.current;
+      if (!textarea || textarea.disabled || !textarea.offsetParent) return;
+      event.preventDefault();
+      textarea.focus();
+    };
+    document.addEventListener('keydown', handleEnterToComposer);
+    return () => document.removeEventListener('keydown', handleEnterToComposer);
+  }, [isActive, textareaRef]);
 
   useEffect(() => {
     return () => {
@@ -355,12 +554,17 @@ function ChatInterface({
     const scheduled = await scheduleMessage({
       content,
       scheduledFor,
-      options: { model: currentProviderModel, effort: currentProviderEffort, permissionMode },
+      options: {
+        model: currentProviderModel,
+        effort: currentProviderEffort,
+        permissionMode,
+        ...(distillMode ? { appendSystemPrompt: DISTILL_SYSTEM_NOTE } : {}),
+      },
     });
     if (scheduled) {
       setInput('');
     }
-  }, [currentProviderEffort, currentProviderModel, input, permissionMode, scheduleMessage, setInput]);
+  }, [currentProviderEffort, currentProviderModel, distillMode, input, permissionMode, scheduleMessage, setInput]);
 
   const permissionContextValue = useMemo(() => ({
     pendingPermissionRequests,
@@ -417,7 +621,32 @@ function ChatInterface({
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>
-      <div className="flex h-full min-h-0 flex-col">
+      <div
+        className="relative flex h-full min-h-0 flex-col"
+        onDragOver={(event) => {
+          if (!hasTodoChatDrag(event.dataTransfer)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+          if (!todoDragOver) setTodoDragOver(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTodoDragOver(false);
+        }}
+        onDrop={(event) => {
+          if (!hasTodoChatDrag(event.dataTransfer)) return;
+          event.preventDefault();
+          setTodoDragOver(false);
+          const payload = readTodoChatDrag(event.dataTransfer);
+          if (payload) handleTodoDrop(payload);
+        }}
+      >
+        {todoDragOver && (
+          <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-primary/10">
+            <p className="rounded-xl border border-border/40 bg-card px-4 py-3 text-sm font-medium shadow-lg">
+              {isEmptyConversation ? '放開：用計畫模式開始規劃這個任務' : '放開：把這個任務帶進輸入框聚焦'}
+            </p>
+          </div>
+        )}
         <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           // Not redundant with the `scroll` listener. A first page is 20 rows,
@@ -452,6 +681,7 @@ function ChatInterface({
           visibleMessageCount={visibleMessageCount}
           visibleMessages={visibleMessages}
           loadEarlierMessages={loadEarlierMessages}
+          loadOlderMessagesNow={loadOlderMessagesNow}
           loadAllMessages={loadAllMessages}
           allMessagesLoaded={allMessagesLoaded}
           isLoadingAllMessages={isLoadingAllMessages}
@@ -469,6 +699,12 @@ function ChatInterface({
           // a live stream writing into it is not recoverable.
           onEditMessage={supportsMessageEditing && !isProcessing ? beginEditMessage : undefined}
           onForkFromMessage={supportsSessionForking ? handleForkFromMessage : undefined}
+          onQuoteMessage={(text) => {
+            // DHC CLI G2: appended as a markdown quote through the voice-transcript path, which also keeps
+            // the composer's value ref in sync; the user then types what is wrong with it.
+            const quoted = text.split('\n').map((line) => `> ${line}`).join('\n');
+            handleVoiceTranscript(`${quoted}\n`);
+          }}
           onLoadFullTranscript={loadFullTranscript}
         />
 
@@ -479,10 +715,17 @@ function ChatInterface({
                 type="button"
                 onClick={scrollToBottomAndReset}
                 aria-label={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
-                className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
+                className={`pointer-events-auto flex h-8 items-center justify-center rounded-full border shadow-sm transition-all duration-200 ${
+                  newMessageCount > 0
+                    ? 'gap-1.5 border-primary/40 bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90'
+                    : 'w-8 border-border/50 bg-card text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`}
                 title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
               >
                 <ArrowDownIcon className="h-4 w-4" aria-hidden />
+                {newMessageCount > 0 && (
+                  <span>{t('input.newMessages', { count: newMessageCount, defaultValue: '{{count}} 則新訊息' })}</span>
+                )}
               </button>
             </div>
           )}
@@ -492,6 +735,7 @@ function ChatInterface({
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
           activity={sessionActivity}
+          runningTool={runningTool}
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}
           permissionMode={permissionMode}
@@ -507,16 +751,21 @@ function ChatInterface({
           modelsLoading={providerModelsLoading}
           tokenBudget={tokenBudget}
           onShowTokenUsage={showCostModal}
+          onCompact={() => { void submitText('/compact'); }}
           isEditingSentMessage={Boolean(editingAnchorId)}
           onCancelEditMessage={cancelEditMessage}
           scheduledMessages={scheduledMessages}
           onScheduleMessage={handleScheduleMessage}
           onCancelScheduledMessage={cancelScheduledMessage}
+          nightQueue={nightQueue}
+          flashTask={flashTask}
+          distillTask={distillTask}
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
           hasInput={Boolean(input.trim())}
           onClearInput={handleClearInput}
-          onSubmit={handleSubmit}
+          onSubmit={handleComposerSubmit}
+          onQueueMessage={queueMessage}
           isDragActive={isDragActive}
           queuedDraft={queuedDraft}
           onEditQueuedDraft={editQueuedDraft}
@@ -525,6 +774,11 @@ function ChatInterface({
           onRemoveAttachment={(index) =>
             setAttachedFiles((previous) =>
               previous.filter((_, currentIndex) => currentIndex !== index),
+            )
+          }
+          onReplaceAttachment={(index, edited) =>
+            setAttachedFiles((previous) =>
+              previous.map((current, currentIndex) => (currentIndex === index ? edited : current)),
             )
           }
           fileErrors={fileErrors}

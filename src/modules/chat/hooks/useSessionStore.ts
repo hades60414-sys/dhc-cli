@@ -10,6 +10,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/shared/api';
+import { serverNow } from '@/shared/serverClock';
 import type { LLMProvider, NormalizedMessage } from '@/shared/types';
 import { removeOptimisticUserEchoes } from '@/modules/chat/utils/sessionMessageReconciliation';
 import {
@@ -813,7 +814,7 @@ export function useSessionStore() {
     const msg: NormalizedMessage = {
       id: streamId,
       sessionId,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(serverNow()).toISOString(), // DHC CLI: sorted among host-stamped rows
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,

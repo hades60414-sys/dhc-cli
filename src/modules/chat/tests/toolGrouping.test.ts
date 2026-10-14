@@ -35,6 +35,7 @@ const thinkingMessage = (): ChatMessage => ({
   isThinking: true,
 });
 
+// DHC CLI 9/27: previews show file names (not paths) and a Chinese remainder.
 test('a run of same-tool calls is grouped and carries a precomputed preview', () => {
   const items = groupConsecutiveTools([
     toolMessage('Read', { file_path: '/a.ts' }),
@@ -44,7 +45,7 @@ test('a run of same-tool calls is grouped and carries a precomputed preview', ()
   assert.equal(items.length, 1);
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/a.ts, /b.ts');
+  assert.equal(group.preview, 'a.ts, b.ts');
 });
 
 test('a group of more than two calls reports the remainder', () => {
@@ -57,7 +58,7 @@ test('a group of more than two calls reports the remainder', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/a.ts, /b.ts, +2 more');
+  assert.equal(group.preview, 'a.ts, b.ts，還有 2 個');
 });
 
 test('a single tool call is not grouped', () => {
@@ -100,7 +101,7 @@ test('an unparsable tool input does not throw while grouping', () => {
   // stays a string, so there is nothing to show. The group must still form, the
   // raw JSON must not leak into the summary line, and both calls must be
   // accounted for as unnamed.
-  assert.equal(group.preview, '+2 more');
+  assert.equal(group.preview, '還有 2 個');
 });
 
 test('a tool with no config is previewed by what it operated on', () => {
@@ -115,7 +116,7 @@ test('a tool with no config is previewed by what it operated on', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, 'npm test, /repo/a.ts');
+  assert.equal(group.preview, 'npm test, a.ts');
 });
 
 test('the group carries the run\u2019s first timestamp, which is what the search jump matches on', () => {
@@ -139,7 +140,7 @@ test('a call the line cannot name is counted in the remainder', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/a.ts, +1 more');
+  assert.equal(group.preview, 'a.ts，還有 1 個');
 });
 
 test('the named calls plus the remainder always add up to the group size', () => {
@@ -154,7 +155,7 @@ test('the named calls plus the remainder always add up to the group size', () =>
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/b.ts, +2 more');
+  assert.equal(group.preview, 'b.ts，還有 2 個');
 });
 
 test('a group that can name nothing still accounts for every call', () => {
@@ -168,7 +169,7 @@ test('a group that can name nothing still accounts for every call', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '+5 more');
+  assert.equal(group.preview, '還有 5 個');
 });
 
 test('hidden reasoning between two tool calls does not split the run', () => {

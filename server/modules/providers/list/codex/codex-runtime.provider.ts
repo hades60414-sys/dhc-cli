@@ -22,6 +22,7 @@ import {
   createNormalizedMessage,
 } from '@/shared/index.js';
 import { notifyRunFailed, notifyRunStopped } from '@/modules/notifications/index.js';
+import { providerTokenUsageService } from '@/modules/providers/services/provider-token-usage.service.js';
 import type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter } from '@/shared/index.js';
 
 type ActiveCodexSession = {
@@ -47,7 +48,7 @@ function readUsageNumber(value: unknown) {
 
 function extractCodexTokenBudget(event: AnyRecord) {
   const info = event?.info || event?.payload?.info || event?.usage?.info;
-  const usage = info?.total_token_usage || event?.usage?.total_token_usage || event?.usage;
+  const usage = info?.last_token_usage || event?.usage?.last_token_usage;
   if (!usage || typeof usage !== 'object') {
     return null;
   }
@@ -417,7 +418,17 @@ async function queryCodex(
 
       // Extract and send token usage if available (normalized to match Claude format)
       if (event.type === 'turn.completed') {
-        const tokenBudget = extractCodexTokenBudget(event);
+        let tokenBudget = extractCodexTokenBudget(event);
+        // SDK turn totals can include many model requests. The transcript has
+        // the final request's actual context, including a compaction decrease.
+        if (!tokenBudget && sessionId) {
+          try {
+            const snapshot = await providerTokenUsageService.getSessionTokenUsage(sessionId);
+            tokenBudget = { ...snapshot, total: snapshot.total || 200000 };
+          } catch (error) {
+            console.warn('Could not read Codex context usage:', error instanceof Error ? error.message : String(error));
+          }
+        }
         if (tokenBudget) {
           sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, sessionId: capturedSessionId || sessionId || null, provider: 'codex' }));
         }

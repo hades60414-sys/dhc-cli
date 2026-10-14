@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import { Badge, Button, Input, LLMProviderLogo } from '@/shared/ui';
+import { filterEnabledAgents, useEnabledAgents } from '@/shared/dhcConfig';
 import type {
   LLMProvider,
   ProviderModelActions,
@@ -48,6 +49,7 @@ export default function ModelLibraryPanel({
   onDone,
 }: ModelLibraryPanelProps) {
   const { t } = useTranslation();
+  const enabledAgents = useEnabledAgents();
   const [selectedProvider, setSelectedProvider] = useState(initialProvider);
   const [editing, setEditing] = useState<ProviderModelOption | null>(null);
   const [model, setModel] = useState('');
@@ -183,7 +185,7 @@ export default function ModelLibraryPanel({
       </div>
 
       <div className="scrollbar-thin flex shrink-0 gap-1 overflow-x-auto rounded-xl border border-border/70 bg-muted/25 p-1">
-        {PROVIDERS.map((provider) => {
+        {filterEnabledAgents(PROVIDERS, (provider) => provider.id, enabledAgents).map((provider) => {
           const selected = provider.id === selectedProvider;
           return (
             <button
@@ -360,7 +362,7 @@ export default function ModelLibraryPanel({
             <div className="mb-2 flex items-center justify-between gap-3 px-1">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">Built-in models</p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">Maintained by CloudCLI and read-only</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">Maintained by DHC CLI and read-only</p>
               </div>
               <Badge variant="secondary" className="rounded-full text-[10px]">{predefinedModels.length}</Badge>
             </div>

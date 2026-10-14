@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
-import { FileIcon, XIcon } from 'lucide-react';
+import { FileIcon, PencilIcon, XIcon } from 'lucide-react';
 
 import { ImageLightbox } from '@/modules/chat/transcript/ChatMessageImages';
+import ImageAnnotator from '@/modules/chat/composer/ImageAnnotator';
 
 type ComposerAttachmentProps = {
   file: File;
   onRemove: () => void;
+  /** DHC CLI: swaps in the marked-up image; without it the image cannot be edited. */
+  onReplace?: (file: File) => void;
   error?: string;
 };
 
@@ -19,9 +22,10 @@ const formatFileSize = (size: number) => {
  * Rendered by chat's ChatComposer for each pending attachment, showing its
  * thumbnail or file chip, upload progress and remove control.
  */
-const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) => {
+const ComposerAttachment = ({ file, onRemove, onReplace, error }: ComposerAttachmentProps) => {
   const [preview, setPreview] = useState<string | undefined>(undefined);
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
   const isImage = file.type.startsWith('image/');
 
   useEffect(() => {
@@ -73,6 +77,28 @@ const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) 
       >
         <XIcon className="h-3 w-3" aria-hidden />
       </button>
+      {isImage && onReplace && (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          title="編輯圖片：畫筆、方框、文字"
+          aria-label={`Edit ${file.name}`}
+          data-testid="composer-attachment-edit"
+          className="absolute -left-1.5 -top-1.5 rounded-full border border-border/40 bg-background/90 p-1 text-foreground shadow-sm backdrop-blur transition-opacity hover:bg-background focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+        >
+          <PencilIcon className="h-3 w-3" aria-hidden />
+        </button>
+      )}
+      {editing && onReplace && (
+        <ImageAnnotator
+          file={file}
+          onCancel={() => setEditing(false)}
+          onDone={(edited) => {
+            setEditing(false);
+            onReplace(edited);
+          }}
+        />
+      )}
       {expanded && preview && (
         <ImageLightbox src={preview} alt={file.name} onClose={() => setExpanded(false)} />
       )}

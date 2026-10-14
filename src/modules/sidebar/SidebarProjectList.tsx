@@ -28,6 +28,7 @@ export default function SidebarProjectList({
   activeSessions,
   attentionSessionIds,
   forceExpanded = false,
+  runningOnly = false,
   isProjectStarred,
   onRenameDraftChange,
   onToggleProject,
@@ -57,9 +58,12 @@ export default function SidebarProjectList({
     />
   );
 
+  // DHC CLI: sessions finished or waiting on you (and not looked at yet) show as "(N)" in the tab title,
+  // so the taskbar tells you something needs you even when the tab is buried.
+  const attentionCount = attentionSessionIds.size;
   useEffect(() => {
-    document.title = pageTitle;
-  }, [pageTitle]);
+    document.title = attentionCount > 0 ? `(${attentionCount}) ${pageTitle}` : pageTitle;
+  }, [pageTitle, attentionCount]);
 
   const showProjects = !isLoading && projects.length > 0 && filteredProjects.length > 0;
 
@@ -115,6 +119,7 @@ export default function SidebarProjectList({
                 onLoadMoreSessions={onLoadMoreSessions}
                 activeSessions={activeSessions}
                 attentionSessionIds={attentionSessionIds}
+                runningOnly={runningOnly}
                 onNewSession={onNewSession}
                 onStartEditingSession={onStartEditingSession}
                 onCancelEditingSession={onCancelEditingSession}

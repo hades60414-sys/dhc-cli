@@ -130,3 +130,11 @@ test('preserves both UI objects produced by an unchanged task notification', () 
   assert.equal(updated[0]?.isTaskNotification, true);
   assert.equal(updated[1]?.content, 'Detailed result');
 });
+
+test('an unflagged compact summary renders as the compaction row, not a user bubble', () => {
+  const [row] = normalizedToChatMessages([
+    message('summary', { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context.' }),
+  ]);
+  assert.equal(row?.type, 'assistant');
+  assert.equal(row?.isCompactSummary, true);
+});

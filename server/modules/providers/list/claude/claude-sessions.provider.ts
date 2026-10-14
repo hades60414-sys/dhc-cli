@@ -349,6 +349,19 @@ function isUserPromptRow(row: AnyRecord): boolean {
 }
 
 /**
+ * DHC：背景工作完成時 CLI 注入的 `<task-notification>` 列也是 type=user，
+ * 幾則通知常掛在同一個 parent 下。它們不是使用者打的字，不能當成「被編輯取代」，
+ * 否則會把後面整段對話藏掉（9/29 實例：4024 列藏掉 2029 列）。
+ */
+function isInjectedNotificationRow(row: AnyRecord): boolean {
+  const content = row.message?.content;
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content) && typeof content[0]?.text === 'string' ? content[0].text : '';
+  return text.trimStart().startsWith('<task-notification>');
+}
+
+/**
  * Drops the rows belonging to prompts that were replaced by an edit.
  *
  * When a message is edited, Claude resumes the conversation partway and appends
@@ -364,7 +377,7 @@ function isUserPromptRow(row: AnyRecord): boolean {
 function dropSupersededPromptBranches(rows: AnyRecord[]): AnyRecord[] {
   const promptSiblings = new Map<string, AnyRecord[]>();
   for (const row of rows) {
-    if (typeof row.parentUuid !== 'string' || !isUserPromptRow(row)) {
+    if (typeof row.parentUuid !== 'string' || !isUserPromptRow(row) || isInjectedNotificationRow(row)) {
       continue;
     }
     const siblings = promptSiblings.get(row.parentUuid);
@@ -575,6 +588,8 @@ const INTERNAL_CONTENT_PREFIXES = [
   'Base directory for this skill:',
 ] as const;
 
+const COMPACT_SUMMARY_PREFIX = 'This session is being continued from a previous conversation';
+
 function isInternalContent(content: string): boolean {
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
 }
@@ -686,12 +701,33 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     if (raw.type === 'content_block_stop') {
       return [createNormalizedMessage({ kind: 'stream_end', sessionId, provider: PROVIDER })];
     }
+    // Live SDK only: compaction start/end, shown as "正在壓縮上下文" in the activity tab.
+    if (raw.type === 'system' && raw.subtype === 'status') {
+      const text = raw.status === 'compacting' ? 'compacting' : 'compacting_done';
+      return [createNormalizedMessage({ kind: 'status', text, sessionId, provider: PROVIDER })];
+    }
 
     const messages: NormalizedMessage[] = [];
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
 
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
+      // The live stream may also carry the compact summary as a text-block array.
+      const summaryText = Array.isArray(raw.message.content)
+        ? raw.message.content.filter((part: AnyRecord) => part?.type === 'text').map((part: AnyRecord) => part.text || '').join('\n')
+        : '';
+      if (summaryText.startsWith(COMPACT_SUMMARY_PREFIX)) {
+        return [createNormalizedMessage({
+          id: baseId,
+          sessionId,
+          timestamp: ts,
+          provider: PROVIDER,
+          kind: 'text',
+          role: 'assistant',
+          content: summaryText,
+          isCompactSummary: true,
+        })];
+      }
       if (Array.isArray(raw.message.content)) {
         // Image attachments sent through the SDK are persisted as base64
         // `image` blocks next to the prompt text. Collect them so the UI can
@@ -791,7 +827,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
          * text; otherwise it is both filtered by the generic internal-prefix
          * check and visually mislabeled as a user message.
          */
-        if (raw.isCompactSummary === true && text.trim()) {
+        // The live SDK stream re-emits the summary without `isCompactSummary`,
+        // so recognise it by the CLI's fixed opening sentence as well.
+        if ((raw.isCompactSummary === true || text.startsWith(COMPACT_SUMMARY_PREFIX)) && text.trim()) {
           messages.push(createNormalizedMessage({
             id: baseId,
             sessionId,

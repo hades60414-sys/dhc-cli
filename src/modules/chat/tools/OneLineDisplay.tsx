@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { splitPathForDisplay } from '@/modules/chat/utils/pathDisplay';
 
 import { copyTextToClipboard } from '@/shared/utils';
 import { ToolStatusBadge } from '@/modules/chat/tools/ToolStatusBadge';
@@ -57,6 +58,7 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   toolId,
   status,
 }) => {
+  const [expandedCommand, setExpandedCommand] = useState(false);
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const isTerminal = style === 'terminal';
@@ -93,6 +95,9 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
 
   // Terminal style: dark pill around the command
   if (isTerminal) {
+    // DHC CLI UI night 4: a 20-line one-liner used to fill the screen; show ~4 lines and a toggle.
+    const longCommand = wrapText && value.length > 240;
+    const clipped = longCommand && !expandedCommand;
     return (
       <div className="group my-1">
         <div className="flex items-start gap-2">
@@ -103,9 +108,19 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
           </div>
           <div className="flex min-w-0 flex-1 items-start gap-2">
             <div className="min-w-0 flex-1 rounded bg-gray-900 px-2.5 py-1 dark:bg-black">
-              <code className={`font-mono text-xs text-green-400 ${wrapText ? 'whitespace-pre-wrap break-all' : 'block truncate'}`}>
+              <code className={`font-mono text-xs text-green-400 ${wrapText ? 'whitespace-pre-wrap break-all' : 'block truncate'} leading-4 ${clipped ? 'block max-h-16 overflow-hidden' : ''}`}>
                 <span className="select-none text-green-600 dark:text-green-500">$ </span>{value}
               </code>
+              {longCommand && (
+                <button
+                  type="button"
+                  onClick={() => setExpandedCommand((current) => !current)}
+                  className="mt-0.5 text-[11px] text-green-600/80 hover:text-green-400 dark:text-green-500/80"
+                  aria-expanded={!clipped}
+                >
+                  {clipped ? `顯示全部（${value.length} 字）` : '收起'}
+                </button>
+              )}
             </div>
             {status && <ToolStatusBadge status={status} className="mt-0.5" />}
             {action === 'copy' && renderCopyButton()}
@@ -124,7 +139,9 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
 
   // File open style
   if (action === 'open-file') {
-    const displayName = value.split('/').pop() || value;
+    // DHC CLI UI night 3: Windows paths use backslashes, so the row used to show the whole path; now the
+    // file name leads and the last two folders trail in a dimmer tone (full path stays in the tooltip).
+    const { name: displayName, parentHint } = splitPathForDisplay(value);
     return (
       <div className={`group flex items-center gap-1.5 border-l-2 ${colorScheme.border} my-0.5 py-0.5 pl-3`}>
         <span className="flex-shrink-0 text-xs text-muted-foreground">{label || toolName}</span>
@@ -136,6 +153,9 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
         >
           {displayName}
         </button>
+        {parentHint && (
+          <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/50" title={value}>{parentHint}</span>
+        )}
         {status && <ToolStatusBadge status={status} className="ml-auto" />}
       </div>
     );

@@ -11,6 +11,7 @@ import {
   readFileTimestamps,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
+import { finalizeTitle, isAutoSessionName, isTitleEligible, readTitleInputs } from '@/modules/providers/list/claude/auto-session-title.js';
 
 type ParsedSession = {
   sessionId: string;
@@ -24,6 +25,8 @@ type ParsedSession = {
 export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
   private readonly provider = 'claude' as const;
   private readonly claudeHome = path.join(os.homedir(), '.claude');
+  /** DHC CLI: sessions whose name is settled (upgraded to the AI title, or named by hand) — not re-read. */
+  private readonly settledNames = new Set<string>();
 
   /**
    * Returns true when a JSONL file is a subagent transcript or tool result
@@ -141,9 +144,12 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       ?? sessionsDb.getSessionById(parsed.sessionId);
     const existingSessionName = existingSession?.custom_name;
     if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {
+      const upgraded = existingSession && isTitleEligible(existingSession.created_at)
+        ? await this.upgradeAutoName(filePath, parsed.sessionId, existingSession.session_id, existingSessionName)
+        : null;
       return {
         ...parsed,
-        sessionName: normalizeSessionName(existingSessionName, 'Untitled Claude Session'),
+        sessionName: normalizeSessionName(upgraded ?? existingSessionName, 'Untitled Claude Session'),
       };
     }
 
@@ -156,6 +162,33 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       ...parsed,
       sessionName: normalizeSessionName(sessionName, 'Untitled Claude Session'),
     };
+  }
+
+  /**
+   * DHC CLI: a name that is still the start of the first message becomes Claude Code's own title once the
+   * transcript has one. Returns the new name, or null when nothing changed.
+   */
+  private async upgradeAutoName(
+    filePath: string,
+    providerSessionId: string,
+    appSessionId: string,
+    currentName: string,
+  ): Promise<string | null> {
+    if (this.settledNames.has(appSessionId)) return null;
+    try {
+      const { aiTitle: rawTitle, firstPrompt } = readTitleInputs(await readFile(filePath, 'utf8'), providerSessionId);
+      const aiTitle = finalizeTitle(rawTitle, firstPrompt);
+      if (firstPrompt !== null && !isAutoSessionName(currentName, firstPrompt)) {
+        this.settledNames.add(appSessionId);
+        return null;
+      }
+      if (!aiTitle || aiTitle === currentName) return null;
+      sessionsDb.updateSessionCustomName(appSessionId, aiTitle);
+      this.settledNames.add(appSessionId);
+      return aiTitle;
+    } catch {
+      return null;
+    }
   }
 
   private async extractSessionAiTitleFromEnd(

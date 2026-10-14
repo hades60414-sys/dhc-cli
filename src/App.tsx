@@ -4,18 +4,21 @@ import { I18nextProvider } from 'react-i18next';
 import { ThemeProvider } from '@/shared/context/ThemeContext';
 import { UiPreferencesProvider } from '@/shared/context/UiPreferencesContext';
 import { AuthProvider, ProtectedRoute } from '@/modules/auth';
+import DhcConfigGate from '@/shared/DhcConfigGate';
+import TeamOnly from '@/shared/TeamOnly';
 import { TaskMasterProvider,TasksSettingsProvider } from '@/modules/task-master';
 import { WebSocketProvider } from '@/shared/context/WebSocketContext';
 import { PluginsProvider } from '@/modules/plugins';
 import { ProjectWorkspaceRoute } from '@/modules/project-workspace';
 import { i18n } from '@/modules/i18n';
+import { SettingsProfileGate } from '@/modules/sidebar';
 
 const DEPLOYMENT_ASSET_DIRECTORIES = new Set(['assets', 'static', 'icons', 'images']);
 
 /**
  * Detect the router basename from explicit runtime config or deployment hints.
  *
- * CloudCLI can be served from a path prefix by a reverse proxy, for example:
+ * DHC CLI can be served from a path prefix by a reverse proxy, for example:
  *   /ai/manifest.json
  *   /ai/assets/index-abc123.js
  *   /ai/icons/icon-192x192.png
@@ -119,12 +122,15 @@ export default function App() {
               <TasksSettingsProvider>
                 <TaskMasterProvider>
                 <ProtectedRoute>
+                  <DhcConfigGate>
+                  <TeamOnly><SettingsProfileGate /></TeamOnly>
                   <Router basename={routerBasename}>
                     <Routes>
                       <Route path="/" element={<ProjectWorkspaceRoute />} />
                       <Route path="/session/:sessionId" element={<ProjectWorkspaceRoute />} />
                     </Routes>
                   </Router>
+                  </DhcConfigGate>
                 </ProtectedRoute>
                 </TaskMasterProvider>
               </TasksSettingsProvider>

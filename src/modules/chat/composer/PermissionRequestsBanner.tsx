@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldAlertIcon } from 'lucide-react';
 
@@ -36,6 +36,17 @@ export default function PermissionRequestsBanner({
   handleGrantToolPermission,
 }: PermissionRequestsBannerProps) {
   const { t } = useTranslation();
+  // DHC CLI G1: "deny with a reason" — the reason travels back to Claude as the denial message, so it
+  // changes course in the same turn instead of asking again. Keyed by request id; null = box closed.
+  const [denyReasons, setDenyReasons] = useState<Record<string, string | null>>({});
+  const denyWithReason = (requestId: string) => {
+    const reason = (denyReasons[requestId] || '').trim();
+    handlePermissionDecision(requestId, {
+      allow: false,
+      message: reason ? `User denied this tool call. Reason: ${reason}` : t('chat:misc.userDeniedTool'),
+    });
+    setDenyReasons((previous) => ({ ...previous, [requestId]: null }));
+  };
   // Filter out plan tool requests — they are handled inline by PlanDisplay
   const filteredRequests = pendingPermissionRequests.filter(
     (r) => r.toolName !== 'ExitPlanMode' && r.toolName !== 'exit_plan_mode'
@@ -79,14 +90,14 @@ export default function PermissionRequestsBanner({
               <ShieldAlertIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
               <ConfirmationRequest>
                 <div>
-                  <span className="font-medium text-foreground">Permission required</span>
+                  <span className="font-medium text-foreground">Claude 要用這個工具，需要你同意</span>
                   <span className="ml-2 text-muted-foreground">
-                    Tool: <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{request.toolName}</code>
+                    <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{request.toolName}</code>
                   </span>
                 </div>
                 {permissionEntry && (
                   <div className="mt-1 text-xs text-muted-foreground">
-                    Allow rule: <code className="rounded bg-muted px-1 py-0.5 text-xs">{permissionEntry}</code>
+                    記住後套用的規則：<code className="rounded bg-muted px-1 py-0.5 text-xs">{permissionEntry}</code>
                   </div>
                 )}
               </ConfirmationRequest>
@@ -95,7 +106,7 @@ export default function PermissionRequestsBanner({
             {rawInput && (
               <details className="mt-2">
                 <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                  View tool input
+                  看它要做什麼（工具參數）
                 </summary>
                 <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-2 text-xs text-muted-foreground">
                   {rawInput}
@@ -103,12 +114,42 @@ export default function PermissionRequestsBanner({
               </details>
             )}
 
+            {denyReasons[request.requestId] !== null && denyReasons[request.requestId] !== undefined && (
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  type="text"
+                  autoFocus
+                  value={denyReasons[request.requestId] || ''}
+                  onChange={(event) => setDenyReasons((previous) => ({ ...previous, [request.requestId]: event.target.value }))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      denyWithReason(request.requestId);
+                    } else if (event.key === 'Escape') {
+                      setDenyReasons((previous) => ({ ...previous, [request.requestId]: null }));
+                    }
+                  }}
+                  placeholder="不要，因為…（Enter 送出，Claude 會照這個改做法）"
+                  className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <ConfirmationAction variant="outline" onClick={() => denyWithReason(request.requestId)}>
+                  送出拒絕
+                </ConfirmationAction>
+              </div>
+            )}
+
             <ConfirmationActions>
               <ConfirmationAction
                 variant="outline"
                 onClick={() => handlePermissionDecision(request.requestId, { allow: false, message: t('chat:misc.userDeniedTool') })}
               >
-                Deny
+                拒絕
+              </ConfirmationAction>
+              <ConfirmationAction
+                variant="outline"
+                onClick={() => setDenyReasons((previous) => ({ ...previous, [request.requestId]: previous[request.requestId] ?? '' }))}
+              >
+                拒絕並說原因
               </ConfirmationAction>
               <ConfirmationAction
                 variant="outline"
@@ -120,13 +161,13 @@ export default function PermissionRequestsBanner({
                 }}
                 disabled={!permissionEntry}
               >
-                {rememberLabel}
+                {alreadyAllowed ? '允許（已記住）' : '允許並記住'}
               </ConfirmationAction>
               <ConfirmationAction
                 variant="default"
                 onClick={() => handlePermissionDecision(request.requestId, { allow: true })}
               >
-                Allow once
+                允許這次
               </ConfirmationAction>
             </ConfirmationActions>
           </Confirmation>

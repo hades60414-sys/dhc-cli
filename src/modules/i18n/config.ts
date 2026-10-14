@@ -127,7 +127,7 @@ const getSavedLanguage = (): string => {
   if (saved && languages.some(lang => lang.value === saved)) {
     return saved;
   }
-  return 'en';
+  return 'zh-TW'; // DHC CLI: Traditional Chinese by default for the team
 };
 
 // Initialize i18next

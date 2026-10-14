@@ -285,11 +285,12 @@ test('listProjectFiles abandons a directory stream as soon as the entry limit is
       && error.code === 'FILE_TREE_TOO_LARGE'
       && error.statusCode === 413,
   );
-  // The budget plus the single entry that proves it was exceeded.
-  assert.equal(streamedEntries, 10_001);
+  // The budget plus the single entry that proves it was exceeded, once per
+  // depth fallback (10, 3, 1, 0) because the root alone is too large.
+  assert.equal(streamedEntries, 4 * 10_001);
 });
 
-test('listProjectFiles shares the entry limit across nested directories', async () => {
+test('listProjectFiles falls back to a shallower tree when nested directories exceed the limit', async () => {
   const projectRoot = path.resolve('file-tree-test-project');
   const firstDirectory = path.join(projectRoot, 'first');
   const secondDirectory = path.join(projectRoot, 'second');
@@ -315,12 +316,10 @@ test('listProjectFiles shares the entry limit across nested directories', async 
   });
   const service = createFileTreeService(createDependencies(fileSystem, projectRoot));
 
-  await assert.rejects(
-    service.listProjectFiles('project-1'),
-    (error: unknown) => error instanceof AppError
-      && error.code === 'FILE_TREE_TOO_LARGE'
-      && error.statusCode === 413,
-  );
+  const tree = await service.listProjectFiles('project-1');
+
+  assert.deepEqual(tree.map((entry) => entry.name), ['first', 'second']);
+  assert.equal(tree[0]?.children, undefined);
 });
 
 test('readTextFile rejects traversal before invoking the filesystem adapter', async () => {

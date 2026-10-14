@@ -1,11 +1,12 @@
-import { Activity, Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Activity, BookOpen, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Repeat, Search, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import { Link } from 'react-router-dom';
 
 import { Button, Input, Tooltip } from '@/shared/ui';
 import { CLOUDCLI_WORDMARK_FONT_FAMILY } from '@/shared/constants';
 import { IS_PLATFORM,cn } from '@/shared/utils';
+import AlertBell from '@/modules/sidebar/AlertBell';
 import type { SidebarSearchMode } from '@/shared/types';
-import GitHubStarBadge from '@/modules/sidebar/GitHubStarBadge';
 
 const MOD_KEY =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
@@ -27,24 +28,35 @@ type SidebarHeaderProps = {
   isRefreshing: boolean;
   onCreateProject: () => void;
   onCollapseSidebar: () => void;
+  currentVersion: string;
   t: TFunction;
 };
 
 /** Module-level, not a nested render function, so the wordmark is not remounted on every SidebarHeader render. */
-function LogoBlock({ t }: { t: TFunction }) {
+function LogoBlock({ t, version }: { t: TFunction; version: string }) {
   return (
     <div className="flex min-w-0 items-center gap-2.5">
+      {/* DHC CLI mascot: a line-drawn owl. */}
       <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-primary/90 shadow-sm">
-        <svg className="h-3.5 w-3.5 text-primary-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        <svg className="h-5 w-5 text-primary-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 10 L6.5 4.5 L10 7.5 H14 L17.5 4.5 L19 10 V14.5 A7 7 0 0 1 5 14.5 Z" />
+          <circle cx="9.3" cy="12" r="2.3" />
+          <circle cx="14.7" cy="12" r="2.3" />
+          <circle cx="9.3" cy="12" r="0.7" fill="currentColor" stroke="none" />
+          <circle cx="14.7" cy="12" r="0.7" fill="currentColor" stroke="none" />
+          <path d="M11 15.6 L12 17 L13 15.6" />
         </svg>
       </div>
-      <h1
-        className="truncate text-sm font-bold tracking-tight text-foreground"
-        style={{ fontFamily: CLOUDCLI_WORDMARK_FONT_FAMILY }}
-      >
-        {t('app.title')}
-      </h1>
+      <div className="min-w-0">
+        <h1
+          className="truncate text-sm font-bold leading-tight tracking-tight text-foreground"
+          style={{ fontFamily: CLOUDCLI_WORDMARK_FONT_FAMILY }}
+        >
+          {t('app.title')}
+        </h1>
+        {/* DHC CLI：版本從側欄底部搬到標題下方，底部省一列 */}
+        <span className="block truncate text-[10px] leading-tight text-muted-foreground/50">v{version} · DHC CLI</span>
+      </div>
     </div>
   );
 }
@@ -67,6 +79,7 @@ export default function SidebarHeader({
   isRefreshing,
   onCreateProject,
   onCollapseSidebar,
+  currentVersion,
   t,
 }: SidebarHeaderProps) {
   const showSearchTools = (projectsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
@@ -88,15 +101,17 @@ export default function SidebarHeader({
       >
         <div className="flex items-center justify-between gap-2">
           {IS_PLATFORM ? (
-            <a
-              href="https://cloudcli.ai/dashboard"
+            // DHC：點標誌回 DHC CLI 首頁（整頁重新載入），不再連到 cloudcli.ai
+            <Link
+              to="/"
+              reloadDocument
               className="flex min-w-0 items-center gap-2.5 transition-opacity hover:opacity-80"
-              title={t('tooltips.viewEnvironments')}
+              title="回到 DHC CLI 首頁"
             >
-              <LogoBlock t={t} />
-            </a>
+              <LogoBlock t={t} version={currentVersion} />
+            </Link>
           ) : (
-            <LogoBlock t={t} />
+            <LogoBlock t={t} version={currentVersion} />
           )}
 
           <div className="flex flex-shrink-0 items-center gap-0.5">
@@ -123,6 +138,7 @@ export default function SidebarHeader({
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
+            <AlertBell />
             <Button
               variant="ghost"
               size="sm"
@@ -135,7 +151,6 @@ export default function SidebarHeader({
           </div>
         </div>
 
-        <GitHubStarBadge />
 
         {/* Search bar */}
         {showSearchTools && (
@@ -156,17 +171,32 @@ export default function SidebarHeader({
                 {t('search.modeProjects')}
               </button>
               <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
+                onClick={() => onSearchModeChange('routine')}
+                aria-pressed={searchMode === 'routine'}
+                title="例行工作：每月／每季重複的報告，點進去說「更新10月」就照上次的做法產新的"
                 className={cn(
                   "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
+                  searchMode === 'routine'
                     ? "bg-background shadow-sm text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
+                <Repeat className="h-3 w-3" />
+                例行
+              </button>
+              <button
+                onClick={() => onSearchModeChange('query')}
+                aria-pressed={searchMode === 'query'}
+                title="查詢專區：DHC CLI 教學，以及你自己接的文件／資料庫問答"
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
+                  searchMode === 'query'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <BookOpen className="h-3 w-3" />
+                查詢
               </button>
               <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
                 <button
@@ -191,20 +221,21 @@ export default function SidebarHeader({
                   </span>
                 </button>
               </Tooltip>
-              <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
+              {/* DHC CLI：對話縮成圖示放最右（原封存的位置）；封存改從對話分頁上方的連結進入。 */}
+              <Tooltip content={t('search.modeConversations')} position="top">
                 <button
-                  onClick={() => onSearchModeChange('archived')}
-                  aria-pressed={searchMode === 'archived'}
-                  aria-label={t('search.archiveOnlyTooltip', 'Archive only')}
-                  title={t('search.archiveOnlyTooltip', 'Archive only')}
+                  onClick={() => onSearchModeChange('conversations')}
+                  aria-pressed={searchMode === 'conversations' || searchMode === 'archived'}
+                  aria-label={t('search.modeConversations')}
+                  title={t('search.modeConversations')}
                   className={cn(
                     "flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'archived'
+                    searchMode === 'conversations' || searchMode === 'archived'
                       ? "bg-background shadow-sm text-foreground"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
-                  <Archive className="h-3 w-3" />
+                  <MessageSquare className="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>
@@ -250,15 +281,17 @@ export default function SidebarHeader({
       >
         <div className="flex items-center justify-between">
           {IS_PLATFORM ? (
-            <a
-              href="https://cloudcli.ai/dashboard"
+            // DHC：點標誌回 DHC CLI 首頁（整頁重新載入），不再連到 cloudcli.ai
+            <Link
+              to="/"
+              reloadDocument
               className="flex min-w-0 items-center gap-2.5 transition-opacity active:opacity-70"
-              title={t('tooltips.viewEnvironments')}
+              title="回到 DHC CLI 首頁"
             >
-              <LogoBlock t={t} />
-            </a>
+              <LogoBlock t={t} version={currentVersion} />
+            </Link>
           ) : (
-            <LogoBlock t={t} />
+            <LogoBlock t={t} version={currentVersion} />
           )}
 
           <div className="flex flex-shrink-0 gap-1.5">
@@ -275,6 +308,8 @@ export default function SidebarHeader({
             >
               <FolderPlus className="h-4 w-4" />
             </button>
+            {/* DHC CLI 10/14：警示放最右，重新整理／新增專案往左移 */}
+            <AlertBell size="md" />
           </div>
         </div>
 
@@ -296,17 +331,32 @@ export default function SidebarHeader({
                 {t('search.modeProjects')}
               </button>
               <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
+                onClick={() => onSearchModeChange('routine')}
+                aria-pressed={searchMode === 'routine'}
+                title="例行工作：每月／每季重複的報告，點進去說「更新10月」就照上次的做法產新的"
                 className={cn(
                   "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
+                  searchMode === 'routine'
                     ? "bg-background shadow-sm text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
+                <Repeat className="h-3 w-3" />
+                例行
+              </button>
+              <button
+                onClick={() => onSearchModeChange('query')}
+                aria-pressed={searchMode === 'query'}
+                title="查詢專區：DHC CLI 教學，以及你自己接的文件／資料庫問答"
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
+                  searchMode === 'query'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <BookOpen className="h-3 w-3" />
+                查詢
               </button>
               <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
                 <button
@@ -332,20 +382,21 @@ export default function SidebarHeader({
                   <span className="sr-only">{t('search.modeRunning', 'Running')}</span>
                 </button>
               </Tooltip>
-              <Tooltip content={t('search.archiveOnlyTooltip', 'Archive only')} position="top">
+              {/* DHC CLI：對話縮成圖示放最右（原封存的位置）；封存改從對話分頁上方的連結進入。 */}
+              <Tooltip content={t('search.modeConversations')} position="top">
                 <button
-                  onClick={() => onSearchModeChange('archived')}
-                  aria-pressed={searchMode === 'archived'}
-                  aria-label={t('search.archiveOnlyTooltip', 'Archive only')}
-                  title={t('search.archiveOnlyTooltip', 'Archive only')}
+                  onClick={() => onSearchModeChange('conversations')}
+                  aria-pressed={searchMode === 'conversations' || searchMode === 'archived'}
+                  aria-label={t('search.modeConversations')}
+                  title={t('search.modeConversations')}
                   className={cn(
                     "flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-normal transition-all",
-                    searchMode === 'archived'
+                    searchMode === 'conversations' || searchMode === 'archived'
                       ? "bg-background shadow-sm text-foreground"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
-                  <Archive className="h-3 w-3" />
+                  <MessageSquare className="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>

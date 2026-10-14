@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 
 import type { DiffLine } from '@/shared/types';
+import { splitPathForDisplay } from '@/modules/chat/utils/pathDisplay';
 
 type ToolDiffViewerProps = {
   oldContent: string;
@@ -45,18 +46,27 @@ export const ToolDiffViewer: React.FC<ToolDiffViewerProps> = ({
     <div className="overflow-hidden rounded border border-gray-200/60 dark:border-gray-700/50">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-200/60 bg-gray-50/80 px-2.5 py-1 dark:border-gray-700/50 dark:bg-gray-800/40">
-        {onFileClick ? (
-          <button
-            onClick={onFileClick}
-            className="cursor-pointer truncate font-mono text-[11px] text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-          >
-            {filePath}
-          </button>
-        ) : (
-          <span className="truncate font-mono text-[11px] text-gray-600 dark:text-gray-400">
-            {filePath}
-          </span>
-        )}
+        {/* DHC CLI UI night 3: file name first, folders dimmed; the full path stays in the tooltip. */}
+        {(() => {
+          const { name, parentHint } = splitPathForDisplay(filePath);
+          const hint = parentHint ? <span className="ml-1.5 truncate text-[11px] text-gray-500/70 dark:text-gray-500">{parentHint}</span> : null;
+          return onFileClick ? (
+            <span className="flex min-w-0 items-baseline" title={filePath}>
+              <button
+                onClick={onFileClick}
+                className="cursor-pointer truncate font-mono text-[11px] text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+              >
+                {name}
+              </button>
+              {hint}
+            </span>
+          ) : (
+            <span className="flex min-w-0 items-baseline font-mono text-[11px] text-gray-600 dark:text-gray-400" title={filePath}>
+              <span className="truncate">{name}</span>
+              {hint}
+            </span>
+          );
+        })()}
         <span className={`rounded px-1.5 py-px text-[10px] font-medium ${badgeClasses} ml-2 flex-shrink-0`}>
           {badge}
         </span>

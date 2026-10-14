@@ -89,6 +89,8 @@ const fileTreeServices = createFileTreeService({
 });
 
 const fileUploadMiddleware = multer({
+
+  defParamCharset: 'utf8', // DHC CLI: browsers send UTF-8 filenames; multer defaults to latin1 (mojibake for Chinese)
   storage: multer.diskStorage({
     destination: os.tmpdir(),
     filename: (_request, _file, callback) => {

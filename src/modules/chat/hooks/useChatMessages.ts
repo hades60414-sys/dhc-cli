@@ -6,6 +6,9 @@
 import type { ChatMessage,NormalizedMessage,SubagentActivity } from '@/shared/types';
 import { formatUsageLimitText } from '@/modules/chat/utils/chatFormatting';
 
+// The CLI's fixed opening sentence of a context-compaction summary.
+const COMPACT_SUMMARY_PREFIX = 'This session is being continued from a previous conversation';
+
 function formatToolResultContent(content: unknown): string {
   const text = typeof content === 'string' ? content : JSON.stringify(content);
   const toolUseErrorMatch = /^<tool_use_error>([\s\S]*)<\/tool_use_error>$/.exec(text.trim());
@@ -207,7 +210,10 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (msg.role === 'user') {
           // Parse task notifications
           const taskNotif = parseTaskNotification(content);
-          if (taskNotif) {
+          if (content.startsWith(COMPACT_SUMMARY_PREFIX)) {
+            // A live compact summary that reached the client unflagged: the collapsed row, not a user bubble.
+            converted.push({ type: 'assistant', content, timestamp: msg.timestamp, ...sharedMetadata, isCompactSummary: true });
+          } else if (taskNotif) {
             converted.push({
               type: 'assistant',
               content: taskNotif.summary,

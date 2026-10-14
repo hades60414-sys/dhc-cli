@@ -13,13 +13,27 @@ const ENTRY = 'server/index.js';
 
 const mode = process.argv[2] ?? 'promote';
 
+// On Windows, antivirus and the search indexer briefly lock files that tsc just wrote, so a rename
+// right after the build can fail with EPERM/EBUSY. Retry for a few seconds before giving up.
+function renameWithRetry(from, to) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+  }
+}
+
 if (mode === 'recover') {
   // Ran before every server start: if a promotion was interrupted between the
   // two renames, put the previous build back so the server can boot.
   if (!fs.existsSync(`${LIVE}/${ENTRY}`) && fs.existsSync(`${OLD}/${ENTRY}`)) {
     console.error('promote-dist-server: restoring previous dist-server after an interrupted promotion.');
     fs.rmSync(LIVE, { recursive: true, force: true });
-    fs.renameSync(OLD, LIVE);
+    renameWithRetry(OLD, LIVE);
   }
   process.exit(0);
 }
@@ -36,10 +50,10 @@ if (!fs.existsSync(`${NEXT}/${ENTRY}`)) {
 
 fs.rmSync(OLD, { recursive: true, force: true });
 if (fs.existsSync(LIVE)) {
-  fs.renameSync(LIVE, OLD);
+  renameWithRetry(LIVE, OLD);
 }
 try {
-  fs.renameSync(NEXT, LIVE);
+  renameWithRetry(NEXT, LIVE);
 } catch (error) {
   // Put the previous build back before failing so the installation still boots.
   if (fs.existsSync(OLD) && !fs.existsSync(LIVE)) {

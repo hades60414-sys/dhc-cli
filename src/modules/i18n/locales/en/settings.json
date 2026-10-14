@@ -144,6 +144,18 @@
       "actionRequired": "Action required",
       "stop": "Run stopped",
       "error": "Run failed"
+    },
+    "browser": {
+      "title": "Browser notifications (while a tab is open)",
+      "description": "No push service involved: as long as this tab stays open, a system notification pops up. Useful when the tab is buried or minimized.",
+      "unsupported": "This browser does not support notifications.",
+      "denied": "Notifications are blocked by the browser; allow them in the site settings next to the address bar.",
+      "enable": "Enable browser notifications",
+      "disable": "Disable browser notifications",
+      "test": "Test notification",
+      "testBody": "This is what a notification looks like. Click it to jump to the session.",
+      "onlyBackground": "Only when the tab is not in front (quiet while you are looking)",
+      "eventsHint": "Which events notify is set by the Event Types checkboxes below."
     }
   },
   "appearanceSettings": {
@@ -489,7 +501,7 @@
     },
     "managed": {
       "badge": "Managed",
-      "hint": "Managed by CloudCLI."
+      "hint": "Managed by DHC CLI."
     },
     "help": {
       "title": "About Codex MCP",
@@ -521,7 +533,7 @@
     "docs": "Docs",
     "sections": {
       "officialTitle": "Official Plugins",
-      "officialDescription": "Maintained by the CloudCLI team and ready for direct install.",
+      "officialDescription": "Maintained by the DHC CLI team and ready for direct install.",
       "unofficialTitle": "Other Plugins",
       "unofficialDescription": "Unofficial plugins and integrations from other users. Review the source before installing."
     },
@@ -550,9 +562,9 @@
       "install": "Install"
     },
     "prismCloudCLI": {
-      "name": "PRISM CloudCLI",
+      "name": "PRISM DHC CLI",
       "badge": "unofficial",
-      "description": "Session intelligence for Claude Code, inside CloudCLI. See why your sessions are burning tokens without leaving the browser.",
+      "description": "Session intelligence for Claude Code, inside DHC CLI. See why your sessions are burning tokens without leaving the browser.",
       "install": "Install"
     },
     "sessionManagerPlugin": {
@@ -754,7 +766,7 @@
   "mcpTeamCard": {
     "title": "Team MCP Configs",
     "description": "Share MCP server configurations across your team. Everyone stays in sync automatically.",
-    "proLink": "Available with CloudCLI Pro"
+    "proLink": "Available with DHC CLI Pro"
   },
   "mcpServersAddErrors": {
     "loadFailedProvider": "Failed to load {{provider}} MCP servers",
@@ -771,15 +783,15 @@
     "tagline": "Open-source AI coding assistant interface",
     "starOnGitHub": "Star on GitHub",
     "docs": "Docs",
-    "hostedTitle": "Try CloudCLI Hosted",
+    "hostedTitle": "Try DHC CLI Hosted",
     "hostedDescription": "Team collaboration, shared MCP configs, settings sync across environments, and managed infrastructure.",
     "learnMore": "Learn more",
-    "proFeaturesTitle": "CloudCLI Pro Features",
+    "proFeaturesTitle": "DHC CLI Pro Features",
     "syncSettingsTitle": "Sync Settings",
     "syncSettingsDescription": "Keep your preferences, MCP configs, and theme in sync across all your environments.",
     "teamManagementTitle": "Team Management",
     "teamManagementDescription": "Multiple users, role-based access, and shared projects for your team.",
     "licensed": "Licensed under AGPL-3.0",
-    "proCta": "Available with CloudCLI Pro"
+    "proCta": "Available with DHC CLI Pro"
   }
 }

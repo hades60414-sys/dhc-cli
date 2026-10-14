@@ -60,6 +60,7 @@ type SearchSessionConversationsInput = {
   signal?: AbortSignal;
   onTitleResults?: (results: SessionTitleSearchResult[]) => void;
   onProgress?: (update: SessionConversationSearchProgressUpdate) => void;
+  projectIds?: string[] | null;
 };
 
 type SessionRepositoryRow = ReturnType<typeof sessionsDb.getAllSessions>[number];
@@ -167,7 +168,7 @@ function toSummaryText(customName: string | null, fallback: string | null | unde
 }
 
 /**
- * Finds visible sessions whose displayed title contains the query. Title
+ * Finds visible sessions whose displayed title contains every query word. Title
  * matches are resolved from the database before transcript scanning so the UI
  * can always present them first, including sessions without a transcript yet.
  */
@@ -176,17 +177,18 @@ function findSessionTitleResults(
   query: string,
   limit: number,
 ): SessionTitleSearchResult[] {
-  const normalizedQuery = query.toLocaleLowerCase().replace(/\s+/g, ' ');
+  const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
   const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
 
   return sessions
     .flatMap((session) => {
       const sessionTitle = toSummaryText(session.custom_name, session.session_id, session.session_id);
-      const normalizedTitle = sessionTitle.toLocaleLowerCase().replace(/\s+/g, ' ');
-      const matchIndex = normalizedTitle.indexOf(normalizedQuery);
-      if (matchIndex === -1) {
+      const normalizedTitle = sessionTitle.toLocaleLowerCase();
+      const wordIndexes = words.map((word) => normalizedTitle.indexOf(word));
+      if (wordIndexes.length === 0 || wordIndexes.includes(-1)) {
         return [];
       }
+      const matchIndex = Math.min(...wordIndexes);
 
       const projectPath = typeof session.project_path === 'string' && session.project_path.trim()
         ? session.project_path.trim()
@@ -236,41 +238,20 @@ function isInternalCodexContent(content: string): boolean {
   return CODEX_INTERNAL_CONTENT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function createWordMatcher(
-  rawQuery: string,
-  words: string[],
-): Pick<SearchRuntime, 'matchesQuery' | 'buildSnippet'> {
-  const normalizedQuery = rawQuery.trim().replace(/\s+/g, ' ');
-  const requireExactPhrase = words.length > 1 && normalizedQuery.length > 0;
-  const wordPatterns = words.map((word) => new RegExp(`(?<!\\p{L})${escapeRegex(word)}(?!\\p{L})`, 'u'));
-  const phrasePattern = words.map((word) => escapeRegex(word)).join('\\s+');
-  const phraseRegex = new RegExp(phrasePattern, 'iu');
-
-  const allWordsMatch = (textLower: string): boolean =>
-    wordPatterns.every((pattern) => pattern.test(textLower));
-
+/**
+ * Every query word must appear in the message, in any order and not
+ * necessarily next to each other. Words match as plain substrings: CJK
+ * characters all count as letters (\p{L}), so a word-boundary rule never finds
+ * 限額 inside 「VaR限額怎麼算」.
+ */
+function createWordMatcher(words: string[]): Pick<SearchRuntime, 'matchesQuery' | 'buildSnippet'> {
   const matchesQuery = (text: string): boolean => {
     if (typeof text !== 'string' || text.length === 0) {
       return false;
     }
 
-    if (requireExactPhrase) {
-      return phraseRegex.test(text);
-    }
-
-    if (phraseRegex.test(text)) {
-      return true;
-    }
-
-    if (words.length === 1) {
-      return allWordsMatch(text.toLowerCase());
-    }
-
-    return allWordsMatch(text.toLowerCase());
+    const textLower = text.toLowerCase();
+    return words.every((word) => textLower.includes(word));
   };
 
   const buildSnippet = (
@@ -280,25 +261,12 @@ function createWordMatcher(
     const textLower = text.toLowerCase();
     let firstIndex = -1;
     let firstWordLen = 0;
-    let phraseStart = -1;
-    let phraseLength = 0;
 
-    const phraseMatch = phraseRegex.exec(text);
-    if (phraseMatch) {
-      phraseStart = phraseMatch.index;
-      phraseLength = phraseMatch[0].length;
-      firstIndex = phraseStart;
-      firstWordLen = phraseLength;
-    }
-
-    if (firstIndex === -1) {
-      for (const word of words) {
-        const regex = new RegExp(`(?<!\\p{L})${escapeRegex(word)}(?!\\p{L})`, 'u');
-        const match = regex.exec(textLower);
-        if (match && (firstIndex === -1 || match.index < firstIndex)) {
-          firstIndex = match.index;
-          firstWordLen = word.length;
-        }
+    for (const word of words) {
+      const index = textLower.indexOf(word);
+      if (index !== -1 && (firstIndex === -1 || index < firstIndex)) {
+        firstIndex = index;
+        firstWordLen = word.length;
       }
     }
 
@@ -317,22 +285,11 @@ function createWordMatcher(
     const snippetLower = snippet.toLowerCase();
     const highlights: SearchSnippetHighlight[] = [];
 
-    if (phraseStart >= start && phraseStart + phraseLength <= end) {
-      const phraseOffset = prefix.length + (phraseStart - start);
-      highlights.push({
-        start: phraseOffset,
-        end: phraseOffset + phraseLength,
-      });
-    }
-
-    if (!requireExactPhrase) {
-      for (const word of words) {
-        const regex = new RegExp(`(?<!\\p{L})${escapeRegex(word)}(?!\\p{L})`, 'gu');
-        let match = regex.exec(snippetLower);
-        while (match) {
-          highlights.push({ start: match.index, end: match.index + word.length });
-          match = regex.exec(snippetLower);
-        }
+    for (const word of words) {
+      let index = snippetLower.indexOf(word);
+      while (index !== -1) {
+        highlights.push({ start: index, end: index + word.length });
+        index = snippetLower.indexOf(word, index + word.length);
       }
     }
 
@@ -618,14 +575,17 @@ function buildProjectBuckets(searchableSessions: SearchableSessionRow[]): Projec
     bucket.sessions.push(session);
   }
 
+  const sessionTime = (session: SearchableSessionRow): number =>
+    new Date(session.updated_at || session.created_at || 0).getTime();
+
   const buckets = Array.from(projectBuckets.values());
   for (const bucket of buckets) {
-    bucket.sessions.sort((left, right) => {
-      const leftTs = new Date(left.updated_at || left.created_at || 0).getTime();
-      const rightTs = new Date(right.updated_at || right.created_at || 0).getTime();
-      return rightTs - leftTs;
-    });
+    bucket.sessions.sort((left, right) => sessionTime(right) - sessionTime(left));
   }
+
+  // Most recently active project first, so the match limit is spent on recent
+  // conversations instead of whichever project happens to be oldest in the table.
+  buckets.sort((left, right) => sessionTime(right.sessions[0]) - sessionTime(left.sessions[0]));
 
   return buckets;
 }
@@ -728,59 +688,11 @@ async function runRipgrepFilesWithMatches(
 
 async function findMatchedFileKeys(
   searchablePathEntries: SearchablePathEntry[],
-  rawQuery: string,
   words: string[],
   signal?: AbortSignal,
 ): Promise<Set<string>> {
   if (searchablePathEntries.length === 0 || words.length === 0 || signal?.aborted) {
     return new Set();
-  }
-
-  const normalizedQuery = rawQuery.trim().replace(/\s+/g, ' ');
-  const requireExactPhrase = words.length > 1 && normalizedQuery.length > 0;
-
-  if (requireExactPhrase) {
-    let matchedForPhrase = searchablePathEntries.slice();
-
-    // Keep ripgrep as an over-approximation for exact phrase mode by requiring
-    // each word to appear somewhere in the file, then defer strict phrase
-    // validation to the in-memory matcher.
-    for (const word of words) {
-      if (signal?.aborted) {
-        return new Set();
-      }
-
-      const matchedForWord = new Set<string>();
-      const fileChunks = chunkArray(
-        matchedForPhrase.map((entry) => entry.absolutePath),
-        RIPGREP_FILE_CHUNK_SIZE,
-      );
-
-      let nextChunkIndex = 0;
-      const workerCount = Math.min(RIPGREP_CHUNK_CONCURRENCY, fileChunks.length);
-      const workers = Array.from({ length: workerCount }, async () => {
-        while (nextChunkIndex < fileChunks.length && !signal?.aborted) {
-          const currentIndex = nextChunkIndex;
-          nextChunkIndex += 1;
-          const chunkMatches = await runRipgrepFilesWithMatches(word, fileChunks[currentIndex], signal);
-          for (const matchedPath of chunkMatches) {
-            matchedForWord.add(matchedPath);
-          }
-        }
-      });
-
-      await Promise.all(workers);
-      if (signal?.aborted) {
-        return new Set();
-      }
-
-      matchedForPhrase = matchedForPhrase.filter((entry) => matchedForWord.has(entry.normalizedPath));
-      if (matchedForPhrase.length === 0) {
-        break;
-      }
-    }
-
-    return new Set(matchedForPhrase.map((entry) => entry.normalizedPath));
   }
 
   let remainingEntries = searchablePathEntries.slice();
@@ -1143,6 +1055,35 @@ async function parseSessionMatches(
 }
 
 /**
+ * Keeps only sessions owned by one of `projectIds`; null or empty searches
+ * everything. DHC CLI sends the projects its sidebar shows, so the thousands of
+ * hidden batch-run sessions are neither scanned nor counted against the limit.
+ */
+function scopeSessionsToProjects(
+  sessions: SessionRepositoryRow[],
+  projectIds: string[] | null,
+): SessionRepositoryRow[] {
+  if (!projectIds || projectIds.length === 0) {
+    return sessions;
+  }
+
+  const allowedProjectIds = new Set(projectIds);
+  const allowedByPath = new Map<string, boolean>();
+  return sessions.filter((session) => {
+    const projectPath = typeof session.project_path === 'string' ? session.project_path.trim() : '';
+    if (!projectPath) {
+      return false;
+    }
+
+    if (!allowedByPath.has(projectPath)) {
+      const projectId = projectsDb.getProjectPath(projectPath)?.project_id;
+      allowedByPath.set(projectPath, Boolean(projectId && allowedProjectIds.has(projectId)));
+    }
+    return allowedByPath.get(projectPath) === true;
+  });
+}
+
+/**
  * Searches session titles and provider transcripts for the provider search
  * service and its route-level integration tests.
  */
@@ -1152,6 +1093,7 @@ export async function searchConversations(
   onProjectResult: ((update: SessionConversationSearchProgressUpdate) => void) | null = null,
   signal: AbortSignal | null = null,
   onTitleResults: ((results: SessionTitleSearchResult[]) => void) | null = null,
+  projectIds: string[] | null = null,
 ): Promise<{
   results: ProjectConversationResult[];
   titleResults: SessionTitleSearchResult[];
@@ -1171,7 +1113,7 @@ export async function searchConversations(
     return { results: [], titleResults: [], totalMatches: 0, query: safeQuery };
   }
 
-  const activeSessions = sessionsDb.getAllSessions();
+  const activeSessions = scopeSessionsToProjects(sessionsDb.getAllSessions(), projectIds);
   const titleResults = findSessionTitleResults(activeSessions, safeQuery, safeLimit);
   onTitleResults?.(titleResults);
 
@@ -1203,7 +1145,6 @@ export async function searchConversations(
 
   const matchedFileKeys = await findMatchedFileKeys(
     searchablePathEntries,
-    safeQuery,
     words,
     signal ?? undefined,
   );
@@ -1229,7 +1170,7 @@ export async function searchConversations(
   let scannedProjects = 0;
 
   const runtime: SearchRuntime = {
-    ...createWordMatcher(safeQuery, words),
+    ...createWordMatcher(words),
     limit: safeLimit,
     totalMatches: 0,
     isAborted,
@@ -1316,6 +1257,7 @@ export const sessionConversationsSearchService = {
       input.onProgress ?? null,
       input.signal ?? null,
       input.onTitleResults ?? null,
+      input.projectIds ?? null,
     );
   },
 };

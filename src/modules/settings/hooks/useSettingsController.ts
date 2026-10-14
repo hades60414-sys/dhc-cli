@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTheme } from '@/shared/context/ThemeContext';
 import { api } from '@/shared/api';
 import { setNotificationSoundEnabled } from '@/shared/utils';
+import { setBrowserNotifyEvents } from '@/shared/browserNotify';
 import {
   readCodeEditorSettings,
   writeCodeEditorSettings,
@@ -295,6 +296,11 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   useEffect(() => {
     setNotificationSoundEnabled(notificationPreferences.channels.sound);
   }, [notificationPreferences.channels.sound]);
+
+  // DHC CLI: the in-page browser notifier reads the same event toggles, mirrored to localStorage.
+  useEffect(() => {
+    setBrowserNotifyEvents(notificationPreferences.events);
+  }, [notificationPreferences.events]);
 
   // Auto-save permissions and sort order with debounce
   const autoSaveTimerRef = useRef<number | null>(null);

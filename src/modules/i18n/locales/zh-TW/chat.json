@@ -103,14 +103,27 @@
     "attachImages": "附加圖片",
     "send": "傳送",
     "stop": "停止",
+    "sendNow": "立即送出（會打斷目前這輪）",
+    "placeholderAnswer": "也可以直接在這裡輸入答案…",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 斜線指令",
-      "enter": "Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 斜線指令"
+      "enter": "Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 斜線指令",
+      "sendNow": "Enter 立即送出並打斷目前這輪 • 按「排隊」等它做完再送",
+      "answerQuestion": "Enter 會把輸入的文字當作上面問題的答案送出"
+    },
+    "queue": {
+      "sendNext": "排隊：等這輪做完再送",
+      "update": "取代排隊中的訊息",
+      "label": "已排隊",
+      "willSend": "這輪結束後自動送出，點文字可取回修改",
+      "edit": "取回到輸入框修改（不會送出）",
+      "delete": "丟掉這則"
     },
     "clickToChangeMode": "點擊變更權限模式（或在輸入框中按 Tab）",
     "showAllCommands": "顯示所有指令",
     "clearInput": "清空輸入",
-    "scrollToBottom": "捲動到底部"
+    "scrollToBottom": "捲動到底部",
+    "newMessages": "{{count}} 則新訊息"
   },
   "thinkingMode": {
     "selector": {
@@ -177,7 +190,7 @@
     },
     "messages": {
       "showingOf": "顯示 {{shown}} / {{total}} 則訊息",
-      "scrollToLoad": "向上捲動以載入更多",
+      "scrollToLoad": "向上捲動或點這裡載入更多",
       "showingLast": "顯示最近 {{count}} 則訊息（共 {{total}} 則）",
       "loadEarlier": "載入較早的訊息",
       "loadAll": "載入全部訊息",
@@ -274,6 +287,42 @@
     "json": {
       "label": "JSON (.json)",
       "description": "全部訊息原樣輸出，供工具使用。"
+    }
+  },
+  "nightQueue": {
+    "label": "分流",
+    "toggleOn": "分流：打開後送出的 prompt 會先存起來，由伺服器排程一次跑一則。開頭寫 @夜間（或不寫）＝02:00 起依序跑；@12:05 指定那一則的時間；@重置＝額度重置時",
+    "toggleOff": "關閉分流（還有已存的 prompt 時會先問你：立即執行或全部取消）",
+    "banner": "分流中：送出的 prompt 會先存起來。開頭寫 @夜間（或不寫）＝02:00 起依存入順序一次跑一則，07:00 後不開新的、沒跑完的隔晚接著；@12:05 就那一則 12:05 跑；@重置＝額度重置時。再按一次分流可以立即執行或取消。",
+    "bannerBypass": "執行時用 bypass（不必按允許；刪資料、付款、改權限、對外發送仍會跳過並記錄給你）。",
+    "bypassQuestion": {
+      "title": "分流",
+      "body": "夜裡沒人能按「允許」。這個對話存的 prompt 要用 bypass 執行嗎？不用的話，需要允許的動作會被跳過。刪資料、付款、改權限、對外發送這類動作不論哪種都會跳過並記錄給你。",
+      "yes": "用 bypass 開啟",
+      "no": "不用 bypass 開啟",
+      "cancel": "取消"
+    },
+    "placeholder": "夜間分流中：prompt 會先存起來，02:00 起依序執行；開頭寫 @12:05 可指定時間…",
+    "hint": "Enter 存進排程 • 開頭 @12:05 指定時間、@重置＝額度重置時",
+    "store": "存進夜間排程",
+    "status": {
+      "waiting": "等 02:00 開始 · 第 {{position}} 順位",
+      "waitingInWindow": "排隊中 · 第 {{position}} 順位",
+      "waitingAlarm": "等 {{time}} 開始 · 第 {{position}} 順位",
+      "runNow": "即將執行 · 第 {{position}} 順位",
+      "retrying": "上次沒成功（{{reason}}），稍後重試 · 第 {{position}} 順位",
+      "running": "執行中",
+      "failed": "沒有完成：{{reason}}"
+    },
+    "attachments_other": "附 {{count}} 個檔案",
+    "cancelItem": "取消這則",
+    "dismiss": "關閉這個提示",
+    "confirm": {
+      "title": "關閉夜間分流",
+      "body_other": "這個對話還有 {{count}} 則夜間排程。要現在就執行，還是全部取消？",
+      "runNow": "立即執行",
+      "cancelAll": "全部取消",
+      "back": "返回"
     }
   },
   "schedule": {

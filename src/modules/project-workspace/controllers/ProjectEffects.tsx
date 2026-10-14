@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 
 import { usePaletteOpsRegister } from '@/modules/command-palette';
 import { writeSelectedProvider } from '@/shared/selectedProvider';
+import { onBrowserNotifyNavigate } from '@/shared/browserNotify';
 import { useProjectEffectsState } from '@/modules/project-workspace/context/ProjectsStateContext';
 import type { LLMProvider, ProjectWorkspaceShellProps } from '@/shared/types';
 
@@ -50,8 +51,16 @@ export default function ProjectEffects({
 
     navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
 
+    // DHC CLI: clicks on in-page browser notifications route the same way as push notification clicks.
+    const stopNotifyNavigate = onBrowserNotifyNavigate((sessionId) => {
+      setActiveTab('chat');
+      setSidebarOpen(false);
+      navigate(`/session/${sessionId}`);
+    });
+
     return () => {
       navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      stopNotifyNavigate();
     };
   }, [navigate, refreshProjectsSilently, setActiveTab, setSidebarOpen]);
 

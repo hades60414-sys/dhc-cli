@@ -1,12 +1,18 @@
 import { memo, useEffect, useRef } from 'react';
-import { Check, ChevronDown, ChevronRight, Edit3, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Edit3, Loader2, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Button } from '@/shared/ui';
+import { Button, Tooltip } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import type { LLMProvider, MCPServerStatus, Project, ProjectSession, SessionWithProvider } from '@/shared/types';
+import { useBackgroundWorkMap } from '@/shared/backgroundWork';
+import { useCoPeople, useSessionsSharedWith } from '@/shared/coSessions';
+import { PersonAvatar } from '@/modules/user-avatar';
+import { useIsTeamMode } from '@/shared/dhcConfig';
 import { getTaskIndicatorStatus } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import TaskIndicator from '@/modules/sidebar/TaskIndicator';
+import BackgroundWorkIndicator, { WaitingIndicator } from '@/modules/sidebar/BackgroundWorkIndicator';
+import { pickWaiting, useWaitingMap } from '@/shared/waitingOnYou';
 import SidebarProjectSessions from '@/modules/sidebar/SidebarProjectSessions';
 import { useCompactSidebar } from '@/modules/sidebar/hooks/useCompactSidebar';
 
@@ -43,6 +49,7 @@ type SidebarProjectItemProps = {
   onLoadMoreSessions: (projectId: string) => void;
   activeSessions: ReadonlySet<string>;
   attentionSessionIds: ReadonlySet<string>;
+  runningOnly?: boolean;
   onNewSession: (project: Project) => void;
   onStartEditingSession: (projectId: string, sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
@@ -62,7 +69,6 @@ function SidebarProjectItem({
   selectedSession,
   isExpanded,
   isDeleting,
-  isStarred,
   isEditing,
   renameDraft,
   sessions,
@@ -76,7 +82,6 @@ function SidebarProjectItem({
   onRenameDraftChange,
   onToggleProject,
   onProjectSelect,
-  onToggleStarProject,
   onStartEditingProject,
   onCancelEditingProject,
   onSaveProjectName,
@@ -87,6 +92,7 @@ function SidebarProjectItem({
   onLoadMoreSessions,
   activeSessions,
   attentionSessionIds,
+  runningOnly = false,
   onNewSession,
   onStartEditingSession,
   onCancelEditingSession,
@@ -101,6 +107,41 @@ function SidebarProjectItem({
   const sessionCountLabel = `${sessionCountDisplay} session${totalSessionCount === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
   const mobileRenameInputRef = useRef<HTMLInputElement>(null);
+
+  // DHC CLI: a light on the project itself, so a collapsed project still shows that something in it runs —
+  // gray spinner while a conversation is answering, violet while only subagents / background work remain.
+  const backgroundWorkById = useBackgroundWorkMap();
+  let runningCount = 0;
+  let backgroundCount = 0;
+  for (const session of sessions) {
+    if (activeSessions.has(session.id)) runningCount += 1;
+    else if (backgroundWorkById.has(session.id)) backgroundCount += 1;
+  }
+  const backgroundNote = backgroundCount > 0 ? `${backgroundCount} 個對話的子代理或背景工作還在跑` : '';
+  const runningNote = `${runningCount} 個對話執行中${backgroundNote ? `；另有 ${backgroundNote}` : ''}`;
+  // DHC CLI: a conversation in it stopped on a choice question / review — that reminder wins over the spinner.
+  const waitingById = useWaitingMap();
+  const projectWaiting = pickWaiting(sessions.map((session) => session.id), waitingById);
+  // Co-Work: invitations to this person not opened yet keep a light on the collapsed project (muted ones do not).
+  const unreadInvites = useSessionsSharedWith(project.projectId)
+    .filter(([, shared]) => shared.invites?.[project.projectId] && !shared.muted?.includes(project.projectId)).length;
+  const projectActivity = projectWaiting ? (
+    <WaitingIndicator kind={projectWaiting} className="h-4 w-4 flex-shrink-0" position="right" />
+  ) : runningCount > 0 ? (
+    <Tooltip content={runningNote} position="right">
+      <span role="status" aria-label={runningNote} className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+      </span>
+    </Tooltip>
+  ) : backgroundCount > 0 ? (
+    <BackgroundWorkIndicator label={backgroundNote} className="h-4 w-4 flex-shrink-0" position="right" />
+  ) : unreadInvites > 0 ? (
+    <Tooltip content={`${unreadInvites} 個 Co-Work 邀請未讀`} position="right">
+      <span role="status" aria-label={`${unreadInvites} 個 Co-Work 邀請未讀`} data-testid="project-invite-unread" className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+      </span>
+    </Tooltip>
+  ) : null;
 
   useEffect(() => {
     if (!isEditing || !mobileRenameInputRef.current) {
@@ -126,15 +167,20 @@ function SidebarProjectItem({
 
   const isCompact = useCompactSidebar();
 
+  // DHC CLI Co-workspace: a person's project carries their face, the same one a shared session shows.
+  const isTeam = useIsTeamMode();
+  const person = useCoPeople().get(project.projectId);
+  const personAvatar = isTeam && person ? <PersonAvatar person={person} className="h-5 w-5 flex-shrink-0" /> : null;
+
   const toggleProject = () => onToggleProject(project.projectId);
-  const toggleStarProject = () => onToggleStarProject(project.projectId);
 
   const saveProjectName = () => {
     onSaveProjectName(project.projectId, renameDraft);
   };
 
   const selectAndToggleProject = () => {
-    if (selectedProject?.projectId !== project.projectId) {
+    // DHC CLI 10/06: collapsing must not select first — selecting re-expands (查詢 tab opens unselected projects).
+    if (!isExpanded && selectedProject?.projectId !== project.projectId) {
       onProjectSelect(project);
     }
 
@@ -150,37 +196,11 @@ function SidebarProjectItem({
             className={cn(
               'p-3 mx-3 my-1 rounded-lg bg-card border border-border/50 active:scale-[0.98] transition-all duration-150',
               isSelected && 'bg-primary/5 border-primary/20',
-              isStarred &&
-                !isSelected &&
-                'bg-yellow-50/50 dark:bg-yellow-900/5 border-yellow-200/30 dark:border-yellow-800/30',
             )}
             onClick={toggleProject}
           >
             <div className="flex items-center justify-between">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                <button
-                  className={cn(
-                    'w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-all duration-150 border',
-                    isStarred
-                      ? 'bg-yellow-500/10 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800'
-                      : 'bg-gray-500/10 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800',
-                  )}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleStarProject();
-                  }}
-                  title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
-                >
-                  <Star
-                    className={cn(
-                      'w-4 h-4 transition-colors',
-                      isStarred
-                        ? 'text-yellow-600 dark:text-yellow-400 fill-current'
-                        : 'text-gray-600 dark:text-gray-400',
-                    )}
-                  />
-                </button>
-
                 <div className="min-w-0 flex-1">
                   {isEditing ? (
                     <input
@@ -211,7 +231,11 @@ function SidebarProjectItem({
                   ) : (
                     <>
                       <div className="flex min-w-0 flex-1 items-center justify-between">
-                        <h3 className="truncate text-sm font-normal text-foreground">{project.displayName}</h3>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          {personAvatar}
+                          <h3 className="truncate text-sm font-normal text-foreground">{project.displayName}</h3>
+                          {projectActivity}
+                        </div>
                         {tasksEnabled && (
                           <TaskIndicator
                             status={taskStatus}
@@ -291,35 +315,10 @@ function SidebarProjectItem({
           className={cn(
             'flex w-full justify-between p-2 h-auto font-normal hover:bg-accent/50',
             isSelected && 'bg-accent text-accent-foreground',
-            isStarred &&
-              !isSelected &&
-              'bg-yellow-50/50 dark:bg-yellow-900/10 hover:bg-yellow-100/50 dark:hover:bg-yellow-900/20',
           )}
           onClick={selectAndToggleProject}
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            <div
-              className={cn(
-                'w-6 h-6 flex items-center justify-center rounded cursor-pointer transition-all duration-200',
-                isStarred
-                  ? 'hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
-                  : 'opacity-40 hover:opacity-100 hover:bg-accent',
-              )}
-              onClick={(event) => {
-                event.stopPropagation();
-                toggleStarProject();
-              }}
-              title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
-            >
-              <Star
-                className={cn(
-                  'w-3 h-3 transition-colors',
-                  isStarred
-                    ? 'text-yellow-600 dark:text-yellow-400 fill-current'
-                    : 'text-muted-foreground',
-                )}
-              />
-            </div>
             <div className="min-w-0 flex-1 text-left">
               {isEditing ? (
                 <div className="space-y-1">
@@ -345,8 +344,12 @@ function SidebarProjectItem({
                 </div>
               ) : (
                 <div>
-                  <div className="truncate text-sm font-normal text-foreground" title={project.displayName}>
-                    {project.displayName}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {personAvatar}
+                    <div className="truncate text-sm font-normal text-foreground" title={project.displayName}>
+                      {project.displayName}
+                    </div>
+                    {projectActivity}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {sessionCountDisplay}
@@ -428,6 +431,7 @@ function SidebarProjectItem({
         isLoadingMoreSessions={isLoadingMoreSessions}
         activeSessions={activeSessions}
         attentionSessionIds={attentionSessionIds}
+        runningOnly={runningOnly}
         currentTime={currentTime}
         sessionRenameId={sessionRenameId}
         sessionRenameDraft={sessionRenameDraft}

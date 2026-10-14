@@ -1,5 +1,6 @@
 import type { ChatMessage, ToolGroupItem } from '@/shared/types';
 import { getToolConfig } from '@/modules/chat/tools/configs/toolConfigs';
+import { looksLikePath, splitPathForDisplay } from '@/modules/chat/utils/pathDisplay';
 
 export const TOOL_GROUP_THRESHOLD = 2;
 
@@ -42,7 +43,9 @@ function getToolInputPreview(message: ChatMessage): string {
   const title = typeof config.title === 'function' ? config.title(parsedInput) : config.title;
   const value = config.getValue?.(parsedInput);
 
-  return String(value || title || message.displayText || message.content || '').trim();
+  const text = String(value || title || message.displayText || message.content || '').trim();
+  // DHC CLI UI night 4: a group of file edits previews as file names, not whole Windows paths.
+  return looksLikePath(text) ? splitPathForDisplay(text).name : text;
 }
 
 /**
@@ -57,10 +60,12 @@ function getToolInputPreview(message: ChatMessage): string {
  * the staleness risk.
  */
 function buildGroupPreview(messages: ChatMessage[]): string {
-  const named = messages
+  const namedRaw = messages
     .slice(0, PREVIEWED_TOOL_COUNT)
     .map(getToolInputPreview)
     .filter(Boolean);
+  // DHC CLI: seven edits to one file preview as its name once, not 'README.md, README.md'.
+  const named = [...new Set(namedRaw)];
 
   const previewText = named.join(', ');
   // Subtracted from the previews actually printed, not from the two slots the
@@ -69,13 +74,13 @@ function buildGroupPreview(messages: ChatMessage[]): string {
   // input still arriving as partial JSON — is genuinely not named, so it
   // belongs in the remainder. Counting slots instead makes a group of three
   // whose first preview is empty render "/b.ts, +1 more" beside an x3 badge.
-  const extraCount = messages.length - named.length;
+  const extraCount = messages.length - namedRaw.length;
 
   if (!previewText) {
-    return extraCount > 0 ? `+${extraCount} more` : '';
+    return extraCount > 0 ? `還有 ${extraCount} 個` : '';
   }
 
-  return extraCount > 0 ? `${previewText}, +${extraCount} more` : previewText;
+  return extraCount > 0 ? `${previewText}，還有 ${extraCount} 個` : previewText;
 }
 
 export function groupConsecutiveTools(

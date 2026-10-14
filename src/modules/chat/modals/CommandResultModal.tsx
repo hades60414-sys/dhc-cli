@@ -66,6 +66,7 @@ const FALLBACK_COMMANDS: CommandEntry[] = [
   { name: '/memory', descriptionKey: 'chat:misc.fallbackCommands.memory' },
   { name: '/config', descriptionKey: 'chat:misc.fallbackCommands.config' },
   { name: '/help', descriptionKey: 'chat:misc.fallbackCommands.help' },
+  { name: '/clear', descriptionKey: 'chat:misc.fallbackCommands.clear' },
 ];
 
 const getProviderLabel = (provider: string | undefined, fallback = 'Unknown') => {

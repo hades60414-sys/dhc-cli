@@ -6,7 +6,7 @@
     "renameProject": "重新命名專案",
     "noProjects": "找不到專案",
     "loadingProjects": "載入專案中...",
-    "searchPlaceholder": "搜尋專案...",
+    "searchPlaceholder": "搜尋專案與對話...",
     "projectNamePlaceholder": "專案名稱",
     "starred": "星號標記",
     "all": "全部",
@@ -20,7 +20,7 @@
     "runClaudeCli": "在專案目錄中執行 Claude CLI 以開始使用"
   },
   "app": {
-    "title": "CloudCLI",
+    "title": "DHC CLI",
     "subtitle": "AI 程式開發助手"
   },
   "sessions": {
@@ -49,7 +49,7 @@
     "cancel": "取消",
     "clearSearch": "清除搜尋",
     "openCommandPalette": "開啟指令面板",
-    "attentionRequiredIndicator": "工作階段需要處理"
+    "attentionRequiredIndicator": "已完成或在等你回覆，還沒看過"
   },
   "navigation": {
     "chat": "聊天",

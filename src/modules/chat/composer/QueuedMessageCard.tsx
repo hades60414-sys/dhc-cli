@@ -32,7 +32,10 @@ export default function QueuedMessageCard({
               · {t('input.queue.willSend', { defaultValue: 'Will send when this finishes' })}
             </span>
           </div>
-          <p className="mt-0.5 line-clamp-2 break-words text-sm text-foreground/90">{content}</p>
+          {/* DHC CLI B1: the text itself is the take-back control. */}
+          <button type="button" onClick={onEdit} title={t('input.queue.edit', { defaultValue: 'Take back into the box to edit' })} className="mt-0.5 block w-full text-left">
+            <p className="line-clamp-2 break-words text-sm text-foreground/90 hover:text-foreground">{content}</p>
+          </button>
           {attachmentCount > 0 && (
             <p className="mt-0.5 text-xs text-muted-foreground">
               {attachmentCount} {attachmentCount === 1 ? 'file' : 'files'} attached

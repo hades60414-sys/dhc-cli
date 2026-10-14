@@ -14,6 +14,7 @@ const POLL_INTERVAL_MS = 30_000;
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let dispatchInFlight = false;
+let unsubscribeRunCompleted: (() => void) | null = null;
 
 type StoredQueuedMessage = {
   content: string;
@@ -191,11 +192,17 @@ export function initializeScheduledMessageDispatcher(runtime: ProviderRuntimeGat
   // Never keep the process alive just to poll for scheduled messages.
   pollTimer.unref?.();
 
+  // DHC CLI: a queued message must follow the run it waited for (including one the user stopped) at once,
+  // not up to 30 seconds later. A pass already running picks the freed session up on its own next poll.
+  unsubscribeRunCompleted = chatRunRegistry.onRunCompleted(() => poll());
+
   // Catch up on anything that came due while the server was not running.
   poll();
 }
 
 export function closeScheduledMessageDispatcher(): void {
+  unsubscribeRunCompleted?.();
+  unsubscribeRunCompleted = null;
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;

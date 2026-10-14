@@ -230,3 +230,78 @@ test('reset clears the copy so the next user does not inherit the previous one',
   assert.equal(store.readUserPreference('theme', 'light'), 'light');
   assert.equal(localStorage.getItem('user-preferences'), null);
 });
+
+// DHC CLI: settings profiles
+test('an existing device silently stays on the shared profile; a new device must choose', async () => {
+  localStorage.setItem('user-preferences', JSON.stringify({ theme: 'dark' }));
+  let store = await loadStore();
+  assert.equal(store.needsSettingsProfileChoice(), false);
+  assert.equal(store.readActiveSettingsProfileId(), '');
+  assert.equal(store.readUserPreference('theme', 'light'), 'dark');
+
+  localStorage.clear();
+  store = await loadStore();
+  assert.equal(store.needsSettingsProfileChoice(), true);
+});
+
+test('a profile reads and writes its own namespaced keys, leaving shared keys alone', async () => {
+  localStorage.setItem('dhc.settingsProfile', 'abc');
+  serverPreferences = {
+    'dhc.profiles': [{ id: 'abc', name: 'Alex' }],
+    selectedProvider: 'codex',
+    'p:abc:selectedProvider': 'claude',
+  };
+  const store = await loadStore();
+  await store.hydrateUserPreferences();
+
+  assert.equal(store.readUserPreference('selectedProvider', 'x'), 'claude');
+  store.writeUserPreference('theme', 'dark');
+  await vi.advanceTimersByTimeAsync(500);
+  assert.deepEqual(saved, [{ 'p:abc:theme': 'dark' }]);
+  assert.deepEqual(store.listSettingsProfiles(), [{ id: 'abc', name: 'Alex' }]);
+});
+
+test('a device whose profile was deleted elsewhere is asked again', async () => {
+  localStorage.setItem('dhc.settingsProfile', 'gone');
+  serverPreferences = { 'dhc.profiles': [] };
+  const store = await loadStore();
+  await store.hydrateUserPreferences();
+  assert.equal(store.needsSettingsProfileChoice(), true);
+  assert.equal(localStorage.getItem('dhc.settingsProfile'), null);
+});
+
+test('creating a profile copies the current settings under the new id', async () => {
+  localStorage.setItem('dhc.settingsProfile', '');
+  serverPreferences = { theme: 'dark', selectedProvider: 'codex' };
+  const store = await loadStore();
+  await store.hydrateUserPreferences();
+
+  const id = await store.createSettingsProfile('  Alex ', true);
+  const payload = saved.at(-1) as unknown as Record<string, unknown>;
+  assert.deepEqual(payload['dhc.profiles'], [{ id, name: 'Alex' }]);
+  assert.equal(payload[`p:${id}:theme`], 'dark');
+  assert.equal(payload[`p:${id}:selectedProvider`], 'codex');
+  assert.equal(payload.theme, undefined, 'shared keys must not be touched');
+
+  store.chooseSettingsProfile(id);
+  assert.equal(localStorage.getItem('dhc.settingsProfile'), id);
+  expect(localStorage.getItem('user-preferences')).toBeNull();
+});
+
+test('a project-linked profile exposes its project and is reused rather than duplicated', async () => {
+  localStorage.setItem('dhc.settingsProfile', 'p1');
+  serverPreferences = { 'dhc.profiles': [{ id: 'p1', name: '同事A', projectId: 'proj-7' }] };
+  const store = await loadStore();
+  await store.hydrateUserPreferences();
+  assert.equal(store.readActiveSettingsProjectId(), 'proj-7');
+
+  const id = await store.createSettingsProfile('同事A', true, 'proj-7');
+  assert.equal(id, 'p1');
+  assert.deepEqual(saved, [], 'an existing link must not write a second profile');
+
+  const newId = await store.createSettingsProfile('同事B', false, 'proj-9');
+  assert.deepEqual((saved.at(-1) as unknown as Record<string, unknown>)['dhc.profiles'], [
+    { id: 'p1', name: '同事A', projectId: 'proj-7' },
+    { id: newId, name: '同事B', projectId: 'proj-9' },
+  ]);
+});

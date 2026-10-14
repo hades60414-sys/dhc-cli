@@ -207,10 +207,12 @@ export const api = {
   // a query parameter on the streaming endpoints below.
   cloneProjectProgressUrl: (params: Record<string, QueryValue>) =>
     `/api/projects/clone-progress${query({ ...params, token: getStoredAuthToken() })}`,
-  searchConversationsUrl: (searchQuery: string, limit = 50) =>
+  searchConversationsUrl: (searchQuery: string, limit = 50, projectIds: string[] = []) =>
     `/api/providers/search/sessions${query({
       q: searchQuery,
       limit,
+      // DHC CLI: only the sidebar's projects; servers before 2026-10-05 ignore it.
+      projectIds: projectIds.join(','),
       token: getStoredAuthToken(),
     })}`,
 
@@ -238,6 +240,15 @@ export const api = {
     post(`/api/providers/sessions/${encodeURIComponent(sessionId)}/fork`, body),
   renameSession: (sessionId: string, summary: string) =>
     put(`/api/providers/sessions/${sessionId}`, { summary }),
+  // DHC CLI 「快速取名」: a short name for what the session is doing now; saves nothing.
+  suggestSessionTitle: (sessionId: string) =>
+    post(`/api/providers/sessions/${encodeURIComponent(sessionId)}/suggest-title`, {}),
+  // DHC CLI 10/13 規劃白板: the chat beside the canvas; may return a redrawn board.
+  planBoardAssist: (body: { board: unknown; chat: unknown; message: string }) =>
+    post('/api/providers/plan-board/assist', body),
+  // DHC CLI 10/14 工具庫: the AI chat beside each tool (專案板、試算工作台…); the tool id picks the instructions.
+  toolAssist: (body: { tool: string; context: unknown; chat: unknown; message: string }) =>
+    post('/api/providers/tool-assist', body),
 
   // Scheduled messages: send a message to a session at a future time.
   scheduledMessages: {
@@ -246,6 +257,27 @@ export const api = {
     create: (body: { sessionId: string; content: string; scheduledFor: string; options?: unknown }) =>
       post('/api/scheduled-messages', body),
     cancel: (id: string) => del(`/api/scheduled-messages/${encodeURIComponent(id)}`),
+  },
+
+  // DHC CLI night queue: a session's prompts held for the 02:00 window, or run at once on "run now".
+  nightQueue: {
+    list: () => get('/api/night-queue/sessions'),
+    get: (sessionId: string) => get(`/api/night-queue/sessions/${encodeURIComponent(sessionId)}`),
+    setEnabled: (sessionId: string, enabled: boolean, settings?: { startAt: string | null; useBypass: boolean }) =>
+      put(`/api/night-queue/sessions/${encodeURIComponent(sessionId)}/mode`, { enabled, ...settings }),
+    enqueue: (
+      sessionId: string,
+      body: {
+        content: string;
+        options?: unknown;
+        mode?: { startAt: string | null; useBypass: boolean };
+        /** This prompt's own start time ("@12:05"), over the session's default. */
+        startAt?: string | null;
+      },
+    ) => post(`/api/night-queue/sessions/${encodeURIComponent(sessionId)}/items`, body),
+    runNow: (sessionId: string) => post(`/api/night-queue/sessions/${encodeURIComponent(sessionId)}/run-now`),
+    cancelAll: (sessionId: string) => post(`/api/night-queue/sessions/${encodeURIComponent(sessionId)}/cancel-all`),
+    cancel: (id: string) => del(`/api/night-queue/items/${encodeURIComponent(id)}`),
   },
 
   // Workspace file tree
@@ -552,7 +584,7 @@ export const api = {
 
 /**
  * Builds a URL against the user's own OpenAI-compatible voice endpoint. Private to the
- * voice helpers below, which bypass the CloudCLI proxy when a base URL is configured.
+ * voice helpers below, which bypass the DHC CLI proxy when a base URL is configured.
  */
 function voiceDirectUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/$/, '')}${path}`;
@@ -568,7 +600,7 @@ export function voiceConfigSignature(): string {
 
 /**
  * Transcribes recorded audio, posting directly to the user's configured OpenAI-compatible
- * endpoint when one is set and otherwise going through the CloudCLI voice proxy.
+ * endpoint when one is set and otherwise going through the DHC CLI voice proxy.
  */
 export function transcribeVoice(blob: Blob, filename: string): Promise<Response> {
   const config = readVoiceConfig();
@@ -590,7 +622,7 @@ export function transcribeVoice(blob: Blob, filename: string): Promise<Response>
 
 /**
  * Synthesizes speech for the given text, using the user's configured OpenAI-compatible
- * endpoint when one is set and otherwise the CloudCLI voice proxy.
+ * endpoint when one is set and otherwise the DHC CLI voice proxy.
  */
 export function synthesizeVoice(text: string, signal: AbortSignal): Promise<Response> {
   const config = readVoiceConfig();

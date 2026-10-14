@@ -54,6 +54,38 @@ export type ProviderModelActions = {
 export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'browser' | `plugin:${string}`;
 
 /** A message queued to be sent to a session at a future time. */
+/** DHC CLI: one prompt held in a session's night queue. */
+export type NightQueueItem = {
+  id: string;
+  sessionId: string;
+  content: string;
+  attachmentCount: number;
+  status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
+  /** The user chose "run now": it goes ahead of the night queue, at any hour. */
+  runNow: boolean;
+  /** 1-based place in the queue across every session, while waiting. */
+  position: number | null;
+  failureReason: string | null;
+  /** The alarm it waits for (UTC ISO), or null for the 02:00-07:00 night window. */
+  startAt: string | null;
+  useBypass: boolean;
+  createdAt: string;
+};
+
+/** DHC CLI: when a session's stored prompts start (alarm instant, or null = night window) and whether bypass was agreed. */
+export type NightQueueSettings = {
+  startAt: string | null;
+  useBypass: boolean;
+};
+
+/** DHC CLI: a session's night-mode settings (null = off), and its unfinished night-queue items. */
+export type NightQueueState = {
+  sessionId: string;
+  enabled: boolean;
+  mode: NightQueueSettings | null;
+  items: NightQueueItem[];
+};
+
 export type ScheduledMessage = {
   id: string;
   sessionId: string;
@@ -140,7 +172,7 @@ export type ReleaseInfo = {
   publishedAt: string;
 };
 
-/** How this CloudCLI install was obtained; decides whether the UI offers a self-update action. */
+/** How this DHC CLI install was obtained; decides whether the UI offers a self-update action. */
 export type InstallMode = 'git' | 'npm';
 
 // ---------------------------
@@ -990,7 +1022,7 @@ type McpImportMode = 'form' | 'json';
 
 //----------------- PLUGINS ------------
 
-/** An installed CloudCLI plugin's manifest and runtime status (entry point, slot, permissions, enabled and server-running flags); always import this type explicitly from `@/shared/types`, because `Plugin` is also a DOM global and an unimported reference silently resolves to that instead. */
+/** An installed DHC CLI plugin's manifest and runtime status (entry point, slot, permissions, enabled and server-running flags); always import this type explicitly from `@/shared/types`, because `Plugin` is also a DOM global and an unimported reference silently resolves to that instead. */
 export type Plugin = {
   name: string;
   displayName: string;
@@ -1188,7 +1220,7 @@ export type CodeEditorSettingsState = {
 
 //----------------- SETTINGS CREDENTIALS ------------
 
-/** One stored CloudCLI API key as the server returns it, in snake_case, including its masked key, creation and last-used timestamps and active flag; render it, do not rebuild it. */
+/** One stored DHC CLI API key as the server returns it, in snake_case, including its masked key, creation and last-used timestamps and active flag; render it, do not rebuild it. */
 export type ApiKeyItem = {
   id: string;
   key_name: string;
@@ -1271,6 +1303,8 @@ export type SidebarProjectListProps = SessionRowActions & {
   onLoadMoreSessions: (projectId: string) => void;
   loadingMoreProjects: Set<string>;
   forceExpanded?: boolean;
+  /** DHC CLI: the running (heartbeat) tab hides 收納盒 with no running session. */
+  runningOnly?: boolean;
   isProjectStarred: (projectName: string) => boolean;
   onToggleProject: (projectName: string) => void;
   onProjectSelect: (project: Project) => void;
@@ -1288,7 +1322,7 @@ export type SidebarProjectListProps = SessionRowActions & {
 export type ProjectSortOrder = 'name' | 'date';
 
 /** Which list the sidebar is currently showing: projects, conversation search results, running sessions or archived items. */
-export type SidebarSearchMode = 'projects' | 'conversations' | 'running' | 'archived';
+export type SidebarSearchMode = 'projects' | 'conversations' | 'query' | 'routine' | 'running' | 'archived';
 
 /** A Project narrowed to the archived state so archived entries can be listed and restored without being mistaken for active projects. */
 export type ArchivedProjectListItem = Project & { isArchived: true };

@@ -1,8 +1,11 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { AppTab, Project, ProjectSession } from '@/shared/types';
+import { useBackgroundWork } from '@/shared/backgroundWork';
+import { useBusySessionIdSet } from '@/shared/context/SessionProtectionContext';
+import { endFlashSession, useIsFlashSession } from '@/shared/flashTasks';
 import { cn } from '@/shared/utils';
 import MobileMenuButton from '@/modules/project-workspace/MobileMenuButton';
 import WorkspaceTabs from '@/modules/project-workspace/WorkspaceTabs';
@@ -35,6 +38,12 @@ export default function WorkspaceHeader({
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const hasOverflow = canScrollLeft || canScrollRight;
+  // DHC CLI 快閃任務: end the open task from here too — same no-dialog delete as the sidebar ×.
+  const isFlash = useIsFlashSession(selectedSession?.id, selectedProject);
+  const flashSessionId = activeTab === 'chat' && selectedSession && isFlash ? selectedSession.id : null;
+  const busySessionIds = useBusySessionIdSet();
+  const backgroundWork = useBackgroundWork(flashSessionId ?? '');
+  const showFlashEnd = flashSessionId !== null && !busySessionIds.has(flashSessionId) && !backgroundWork;
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
@@ -102,6 +111,17 @@ export default function WorkspaceHeader({
             selectedSession={selectedSession}
             shouldShowTasksTab={shouldShowTasksTab}
           />
+          {showFlashEnd && (
+            <button
+              type="button"
+              title="結束這個快閃任務：移到側欄「封存」，7 天內可以還原，之後自動刪除"
+              className="flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-red-500/40 px-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-400"
+              onClick={() => void endFlashSession(flashSessionId)}
+            >
+              <X className="h-3.5 w-3.5" />
+              結束任務
+            </button>
+          )}
         </div>
 
         <div className="-mx-3 min-w-0 sm:mx-0 sm:flex-1">

@@ -90,7 +90,7 @@ export const showCompletionTitleIndicator = (): void => {
     return;
   }
 
-  const baseTitle = stripIndicator(document.title || 'CloudCLI UI');
+  const baseTitle = stripIndicator(document.title || 'DHC CLI UI');
   document.title = `${getIndicatorPrefix()}${baseTitle}`;
 
   if (pageIsActive()) {

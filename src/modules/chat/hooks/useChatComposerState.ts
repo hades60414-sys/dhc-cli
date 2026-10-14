@@ -13,7 +13,9 @@ import { useDropzone } from 'react-dropzone';
 
 import { api } from '@/shared/api';
 import { PROVIDER_PERMISSION_PREFERENCE_KEYS } from '@/shared/constants';
-import { readUserPreference } from '@/shared/userSettings';
+import { readActiveSettingsProfile, readUserPreference } from '@/shared/userSettings';
+import { readCoSession, withSenderPrefix } from '@/shared/coSessions';
+import { DISTILL_SYSTEM_NOTE } from '@/shared/distillSessions';
 import type { CommandModalPayload, CostCommandData, HelpCommandData, MarkSessionProcessing, ModelCommandData, QueuedDraft, SessionActivityMap, StatusCommandData,QueuedSendOptions,ChatAttachment,ChatMessage,PendingPermissionRequest,PermissionMode,SessionEstablishedContext,Project,ProjectSession,LLMProvider,SlashCommand } from '@/shared/types';
 import { grantClaudeToolPermission } from '@/modules/chat/utils/chatPermissions';
 import {
@@ -29,6 +31,8 @@ import { escapeRegExp } from '@/modules/chat/utils/chatFormatting';
 import { useFileMentions } from '@/modules/chat/hooks/useFileMentions';
 import { useInputHistory } from '@/modules/chat/hooks/useInputHistory';
 import { useSlashCommands } from '@/modules/chat/hooks/useSlashCommands';
+import { markInterruptSend } from '@/modules/chat/utils/interruptSends';
+import { parseStartAnnotation, readQuotaReset } from '@/modules/chat/utils/nightQueueTime';
 
 type UseChatComposerStateArgs = {
   selectedProject: Project | null;
@@ -61,10 +65,28 @@ type UseChatComposerStateArgs = {
   onSessionEstablished?: (sessionId: string, context: SessionEstablishedContext) => void;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
+  onClearConversation?: () => void; // DHC CLI: /clear and /new
+  onReviewChanges?: () => void; // DHC CLI: /review — ask Claude to review what it changed this session
   scrollToBottom: () => void;
   addMessage: (msg: ChatMessage) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
+  /** DHC CLI: the run's open permission prompts; a typed reply answers a pending AskUserQuestion. */
+  pendingPermissionRequests?: PendingPermissionRequest[];
+  /** DHC CLI: this chat is in night mode — prompts are stored for the night queue instead of sent. */
+  nightMode?: boolean;
+  /**
+   * DHC CLI: stores one prompt in a session's night queue — at `startAt` when it named its own time ("@12:05"),
+   * else the 02:00 window; says why when it could not be stored.
+   */
+  onNightQueueSubmit?: (
+    sessionId: string,
+    content: string,
+    options: Record<string, unknown>,
+    startAt?: string | null,
+  ) => Promise<{ ok: true } | { ok: false; message: string | null }>;
+  /** DHC CLI: the flask is on — every turn carries the 蒸餾模式 note as the system-prompt append. */
+  distillMode?: boolean;
 };
 
 type MentionableFile = {
@@ -168,10 +190,16 @@ export function useChatComposerState({
   tokenBudget,
   sendMessage,
   sendByCtrlEnter,
+  pendingPermissionRequests,
+  nightMode = false,
+  onNightQueueSubmit,
+  distillMode = false,
   onSessionProcessing,
   onSessionEstablished,
   onFileOpen,
   onShowSettings,
+  onClearConversation,
+  onReviewChanges,
   scrollToBottom,
   addMessage,
   setIsUserScrolledUp,
@@ -366,9 +394,24 @@ export function useChatComposerState({
     }, 0);
   }, [addMessage]);
 
+  const onReviewChangesRef = useRef(onReviewChanges);
+  onReviewChangesRef.current = onReviewChanges;
+
   const executeCommand = useCallback(
     async (command: SlashCommand, rawInput?: string, options?: { preserveInput?: boolean }) => {
       if (!command || !selectedProject) {
+        return;
+      }
+      // DHC CLI: /clear (alias /new) = fresh conversation in this project, handled entirely client-side.
+      if (command.name === '/clear' || command.name === '/new') {
+        setInput('');
+        onClearConversation?.();
+        return;
+      }
+      // DHC CLI: /review = the one-click self-review prompt (was a toolbar button; the toolbar was too full).
+      if (command.name === '/review') {
+        setInput('');
+        onReviewChangesRef.current?.();
         return;
       }
 
@@ -438,6 +481,7 @@ export function useChatComposerState({
       selectedSession?.id,
       addMessage,
       tokenBudget,
+      onClearConversation,
     ],
   );
 
@@ -549,6 +593,18 @@ export function useChatComposerState({
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       const items = Array.from(event.clipboardData.items);
 
+      // DHC CLI B2: a big paste (a log, a query result) used to blow the box up to hundreds of lines.
+      // It becomes a text attachment instead — Claude gets the whole thing, the composer shows a chip.
+      const pastedText = event.clipboardData.getData('text/plain');
+      const pastedLines = pastedText ? pastedText.split('\n').length : 0;
+      if (pastedText && (pastedLines > 40 || pastedText.length > 6000)) {
+        event.preventDefault();
+        const stamp = new Date();
+        const name = `貼上內容-${pastedLines}行-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}${String(stamp.getSeconds()).padStart(2, '0')}.txt`;
+        handleAttachmentFiles([new File([pastedText], name, { type: 'text/plain' })]);
+        return;
+      }
+
       items.forEach((item) => {
         if (!item.type.startsWith('image/')) {
           return;
@@ -601,20 +657,23 @@ export function useChatComposerState({
       toolsSettings,
       skipPermissions: toolsSettings?.skipPermissions || false,
       sessionSummary: getNotificationSessionSummary(selectedSession, currentInput),
+      ...(distillMode ? { appendSystemPrompt: DISTILL_SYSTEM_NOTE } : {}),
     };
   }, [
     currentProviderEffort,
     currentProviderModel,
+    distillMode,
     permissionMode,
     provider,
     resolvePermissionModeForProvider,
     selectedSession,
   ]);
 
-  const handleSubmit = useCallback(
+  const submitTurn = useCallback(
     async (
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
       queuedSubmission?: QueuedDraft,
+      mode?: { queue?: boolean },
     ) => {
       event.preventDefault();
       const currentInput = queuedSubmission?.content ?? inputValueRef.current;
@@ -631,10 +690,48 @@ export function useChatComposerState({
         return;
       }
 
-      // A turn is already in flight: stash this message instead of sending it.
+      // DHC CLI: while the assistant waits on an AskUserQuestion prompt, the typed reply IS the answer.
+      // Before, the box was hidden behind the panel, so people stopped the session to get a word in.
+      const questionRequest = queuedSubmission
+        ? undefined
+        : pendingPermissionRequests?.find((request) => request.toolName === 'AskUserQuestion');
+      if (questionRequest && currentInput.trim() && currentAttachments.length === 0) {
+        const questionInput = questionRequest.input && typeof questionRequest.input === 'object'
+          ? questionRequest.input as Record<string, unknown>
+          : {};
+        const questions = Array.isArray(questionInput.questions)
+          ? questionInput.questions as Array<{ question?: unknown }>
+          : [];
+        const firstQuestion = typeof questions[0]?.question === 'string' ? questions[0].question : null;
+        const answers: Record<string, string> = firstQuestion ? { [firstQuestion]: currentInput.trim() } : {};
+        sendMessage({
+          type: 'chat.permission-response',
+          requestId: questionRequest.requestId,
+          allow: true,
+          updatedInput: { ...questionInput, answers },
+        });
+        setPendingPermissionRequests((previous) =>
+          previous.filter((request) => request.requestId !== questionRequest.requestId),
+        );
+        recordSentMessage(currentInput, sessionKey);
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+        if (draftScopeRef.current) {
+          writeDraftText(draftScopeRef.current, '');
+        }
+        return;
+      }
+
+      // A turn is already in flight and the user chose to queue: stash this message instead of sending it.
       // Upload attached files now so the queued record contains durable image
       // descriptors that can be sent even if another session is open later.
-      if (isLoading) {
+      // DHC CLI: plain Enter while a turn runs no longer queues — it sends now and interrupts (below).
+      if (isLoading && (queuedSubmission || mode?.queue)) {
         // A run can restart in the tiny gap between scheduling and flushing a
         // queued submission. Put the same durable draft back without uploading
         // its files again.
@@ -740,7 +837,44 @@ export function useChatComposerState({
         }
       }
 
-      const messageContent = currentInput;
+      // DHC CLI: night mode stores the prompt for the night queue instead of sending it (below). Programmatic
+      // turns (the eraser's /compact) and edits of a sent message still go now. A night prompt may start with
+      // its own time — "@12:05 …" or "@重置 …" (quota reset) — which is read off here, before a session is
+      // created or files uploaded, so a time that cannot be read stops the store instead of going to 02:00.
+      const storesForNight = Boolean(nightMode && onNightQueueSubmit && !queuedSubmission && !editingAnchorId);
+      let messageContent = currentInput;
+      let nightStartAt: string | null = null;
+      if (storesForNight) {
+        const annotation = parseStartAnnotation(currentInput);
+        let startAt: Date | null = null;
+        if (annotation.kind === 'invalid') {
+          addMessage({ type: 'error', content: annotation.message, timestamp: new Date() });
+          return;
+        }
+        if (annotation.kind === 'time') {
+          startAt = annotation.startAt;
+        } else if (annotation.kind === 'reset') {
+          const reset = await readQuotaReset();
+          if (!reset) {
+            addMessage({
+              type: 'error',
+              content: '讀不到額度重置時間（或額度已經是新的），請改寫成 @12:05 這樣的時間。',
+              timestamp: new Date(),
+            });
+            return;
+          }
+          // A minute past the reset, so the prompt meets the new quota even with the host clock behind.
+          startAt = new Date(reset.getTime() + 60_000);
+        }
+        if (annotation.kind === 'time' || annotation.kind === 'reset' || annotation.kind === 'night') {
+          messageContent = annotation.rest;
+          nightStartAt = startAt ? startAt.toISOString() : null;
+          if (!messageContent.trim() && currentAttachments.length === 0 && previouslyUploadedAttachments.length === 0) {
+            addMessage({ type: 'error', content: '只有時間沒有內容，請在 @時間 後面寫要做的事。', timestamp: new Date() });
+            return;
+          }
+        }
+      }
 
       let uploadedAttachments = previouslyUploadedAttachments;
       if (uploadedAttachments.length === 0 && currentAttachments.length > 0) {
@@ -759,7 +893,7 @@ export function useChatComposerState({
       }
 
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
-      const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
+      const sessionSummary = getNotificationSessionSummary(selectedSession, messageContent);
 
       // The conversation always has a stable backend-allocated session id
       // BEFORE the first websocket send: brand-new chats allocate one here
@@ -814,10 +948,47 @@ export function useChatComposerState({
         });
       }
 
+      // DHC CLI Co-workspace: in a shared session every message says who sent it, for Claude and for the others.
+      const coSenderName = readCoSession(targetSessionId) ? readActiveSettingsProfile()?.name ?? '' : '';
+      messageContent = withSenderPrefix(messageContent, coSenderName);
+
+      // DHC CLI: night mode — store it (from 02:00, or its own time), one at a time, instead of sending it.
+      if (storesForNight && onNightQueueSubmit) {
+        const stored = await onNightQueueSubmit(targetSessionId, messageContent, {
+          ...buildSendOptions(messageContent),
+          attachments: uploadedAttachments,
+        }, nightStartAt);
+        if (!stored.ok) {
+          addMessage({
+            type: 'error',
+            content: stored.message
+              ? `這則沒有存進夜間排程：${stored.message}`
+              : '這則沒有存進夜間排程（連線問題），請再送一次。',
+            timestamp: new Date(),
+          });
+          return;
+        }
+
+        recordSentMessage(currentInput, targetSessionId);
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setAttachedFiles([]);
+        setFileErrors(new Map());
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+        if (draftScopeRef.current) {
+          writeDraftText(draftScopeRef.current, '');
+        }
+        return;
+      }
+
       const attachmentRecords = uploadedAttachments as ChatAttachment[];
       const userMessage: ChatMessage = {
         type: 'user',
-        content: currentInput,
+        content: withSenderPrefix(currentInput, coSenderName),
         images: attachmentRecords.filter(isImageAttachment),
         files: attachmentRecords.filter((attachment) => !isImageAttachment(attachment)),
         timestamp: new Date(),
@@ -839,6 +1010,13 @@ export function useChatComposerState({
       setIsUserScrolledUp(false);
       setTimeout(() => scrollToBottom(), 100);
 
+      // DHC CLI: sending while a turn runs interrupts that turn server-side (Codex-style steer). Mark it so
+      // the interrupted run's `complete { aborted }` does not drop the indicator for the turn replacing it.
+      const interruptActiveRun = isLoading && !editingAnchorId;
+      if (interruptActiveRun) {
+        markInterruptSend(targetSessionId);
+      }
+
       // One message shape for every provider. The backend resolves the
       // provider, project path, and provider-native resume id from the
       // session row; `options` only carries composer-level preferences.
@@ -849,6 +1027,7 @@ export function useChatComposerState({
         type: editingAnchorId ? 'chat.edit-send' : 'chat.send',
         sessionId: targetSessionId,
         ...(editingAnchorId ? { anchorId: editingAnchorId } : {}),
+        ...(interruptActiveRun ? { interruptActiveRun: true } : {}),
         content: messageContent,
         options: {
           ...(queuedSubmission?.options ?? buildSendOptions(messageContent)),
@@ -897,7 +1076,48 @@ export function useChatComposerState({
       addMessage,
       setIsUserScrolledUp,
       slashCommands,
+      pendingPermissionRequests,
+      setPendingPermissionRequests,
+      nightMode,
+      onNightQueueSubmit,
     ],
+  );
+
+  // DHC CLI: a turn with attachments waits for its upload before the box clears, so a second Enter in that
+  // window sent the whole turn again and the server rejected the copy as RUN_IN_PROGRESS (9/17 08:40: the same
+  // image uploaded twice, 267ms apart). Only an identical repeat is dropped — the upload has no timeout, so
+  // refusing every submit while one is pending could lock the composer.
+  const turnInFlightRef = useRef<{ content: string; attachments: File[] } | null>(null);
+  const handleSubmit = useCallback(
+    async (
+      event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
+      queuedSubmission?: QueuedDraft,
+      mode?: { queue?: boolean },
+    ) => {
+      const turn = {
+        content: queuedSubmission?.content ?? inputValueRef.current,
+        attachments: queuedSubmission?.attachments ?? attachedFiles,
+      };
+      const inFlight = turnInFlightRef.current;
+      if (inFlight && inFlight.content === turn.content && inFlight.attachments === turn.attachments) {
+        event.preventDefault();
+        return;
+      }
+      turnInFlightRef.current = turn;
+      try {
+        await submitTurn(event, queuedSubmission, mode);
+      } finally {
+        if (turnInFlightRef.current === turn) turnInFlightRef.current = null;
+      }
+    },
+    [attachedFiles, submitTurn],
+  );
+
+  // DHC CLI: the composer's explicit "queue" action — hold the message until the current turn finishes.
+  const queueMessage = useCallback(
+    (event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) =>
+      handleSubmit(event, undefined, { queue: true }),
+    [handleSubmit],
   );
 
   useEffect(() => {
@@ -1218,6 +1438,16 @@ export function useChatComposerState({
     inputValueRef.current = '';
   }, [setInput]);
 
+  // DHC CLI: send a literal text turn (used for built-in slash commands like /compact) without touching the draft box.
+  const submitText = useCallback((text: string) => {
+    return handleSubmit(createFakeSubmitEvent(), {
+      content: text,
+      attachments: [],
+      uploadedAttachments: [],
+      options: buildSendOptions(text),
+    });
+  }, [handleSubmit, buildSendOptions]);
+
   return {
     input,
     setInput,
@@ -1249,6 +1479,8 @@ export function useChatComposerState({
     isDragActive,
     openAttachmentPicker: open,
     handleSubmit,
+    queueMessage,
+    submitText,
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,

@@ -3,6 +3,7 @@ import { Database } from 'better-sqlite3';
 import {
   APP_CONFIG_TABLE_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
+  NIGHT_QUEUE_TABLES_SCHEMA_SQL,
   NOTIFICATION_CHANNEL_ENDPOINTS_TABLE_SCHEMA_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
   PROVIDER_MODELS_TABLE_SCHEMA_SQL,
@@ -457,6 +458,15 @@ const addSessionEffortColumn = (db: Database): void => {
   addColumnToTableIfNotExists(db, 'sessions', columnNames, 'effort', 'TEXT');
 };
 
+// DHC CLI: the first night-queue tables (2026-09-24 morning) had no alarm time or bypass consent.
+const addNightQueueScheduleColumns = (db: Database): void => {
+  for (const table of ['night_queue_items', 'night_queue_sessions']) {
+    const columnNames = getTableInfo(db, table).map((column) => column.name);
+    addColumnToTableIfNotExists(db, table, columnNames, 'start_at', 'TEXT');
+    addColumnToTableIfNotExists(db, table, columnNames, 'use_bypass', 'INTEGER NOT NULL DEFAULT 0');
+  }
+};
+
 const ensureProjectsForSessionPaths = (db: Database): void => {
   if (!tableExists(db, 'sessions')) {
     return;
@@ -521,6 +531,8 @@ export const runMigrations = (db: Database) => {
     addForkedFromSessionIdColumn(db);
     ensureProjectsForSessionPaths(db);
     db.exec(SCHEDULED_MESSAGES_TABLE_SCHEMA_SQL);
+    db.exec(NIGHT_QUEUE_TABLES_SCHEMA_SQL);
+    addNightQueueScheduleColumns(db);
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_provider_session_id ON sessions(provider_session_id)');
@@ -529,6 +541,8 @@ export const runMigrations = (db: Database) => {
     // The due-message poll runs on a timer; without this it table-scans.
     db.exec('CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages(status, scheduled_for)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_scheduled_messages_session ON scheduled_messages(session_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_night_queue_items_status ON night_queue_items(status)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_night_queue_items_session ON night_queue_items(session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_is_archived ON sessions(isArchived)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_starred ON projects(isStarred)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_projects_is_archived ON projects(isArchived)');

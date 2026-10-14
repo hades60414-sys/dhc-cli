@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '@/shared/api';
@@ -10,6 +10,13 @@ import type { ServerEvent,
   ProjectSession,IsSessionProcessing } from '@/shared/types';
 import { mergeProjectSelectionMetadata } from '@/modules/project-workspace/utils/projectSelectionMetadata';
 import { readSelectedProvider } from '@/shared/selectedProvider';
+import { getUserPreferencesVersion, resolveSettingsProjectId, subscribeToUserPreferences } from '@/shared/userSettings';
+import { notifyBrowser } from '@/shared/browserNotify';
+import { onFlashSessionEnded } from '@/shared/flashTasks';
+import { forgetSessionInBoxes } from '@/shared/sessionBoxes';
+import { forgetCoSession, isCoMuted } from '@/shared/coSessions';
+import { clearWaitingRequest, clearWaitingSession, markWaiting } from '@/shared/waitingOnYou';
+import { getSessionTitle } from '@/shared/utils';
 
 type UseProjectsStateArgs = {
   sessionId?: string;
@@ -462,7 +469,10 @@ export function useProjectsState({
     }
 
     const viewedSessionId = selectedSessionRef.current?.id ?? sessionId ?? null;
-    if (targetSessionId === viewedSessionId) {
+    // DHC CLI: the viewed session only skips the mark while the tab is actually in front of the user;
+    // a reply that lands in a hidden tab is unread like any other session's.
+    const pageInFront = typeof document !== 'undefined' && document.visibilityState === 'visible' && document.hasFocus();
+    if (targetSessionId === viewedSessionId && pageInFront) {
       return;
     }
 
@@ -702,6 +712,26 @@ export function useProjectsState({
     }
   }, [isLoadingProjects, projects, selectedProject, sessionId]);
 
+  // DHC：開頁時沒指定對話也沒選專案，就自動打開這台裝置設定檔綁定的專案。
+  // 每次載入只做一次，之後使用者自己切走不會被拉回來。
+  const settingsVersion = useSyncExternalStore(subscribeToUserPreferences, getUserPreferencesVersion);
+  const settingsProjectOpenedRef = useRef(false);
+  useEffect(() => {
+    if (settingsProjectOpenedRef.current || isLoadingProjects || projects.length === 0) {
+      return;
+    }
+    if (selectedProject || sessionId) {
+      settingsProjectOpenedRef.current = true;
+      return;
+    }
+    const projectId = resolveSettingsProjectId(projects);
+    const project = projectId ? projects.find((candidate) => candidate.projectId === projectId) : undefined;
+    if (project) {
+      settingsProjectOpenedRef.current = true;
+      setSelectedProject(project);
+    }
+  }, [isLoadingProjects, projects, selectedProject, sessionId, settingsVersion]);
+
   // Realtime sidebar updates. The backend pushes per-session deltas
   // (`session_upserted`) instead of full project snapshots, so each event is
   // a keyed upsert that can never clobber unrelated client state — no
@@ -740,19 +770,55 @@ export function useProjectsState({
         : null;
       const viewedSessionId = selectedSessionRef.current?.id ?? sessionId ?? null;
 
-      if (
-        eventSessionId
-        && eventSessionId !== viewedSessionId
-        && event.kind !== 'chat_subscribed'
-        && event.kind !== 'loading_progress'
-        && event.kind !== 'session_upserted'
-        && event.kind !== 'status'
-        && event.kind !== 'stream_end'
-        && event.kind !== 'permission_resolved'
-        && event.kind !== 'permission_cancelled'
-        && event.kind !== 'websocket_reconnected'
-      ) {
+      // DHC CLI: the reminder icon for a pending choice question / review (see shared/waitingOnYou).
+      const eventRequestId = typeof (event as { requestId?: unknown }).requestId === 'string'
+        ? (event as { requestId: string }).requestId
+        : '';
+      if (event.kind === 'permission_request' && eventSessionId) {
+        markWaiting(eventSessionId, eventRequestId, (event as { toolName?: unknown }).toolName);
+      } else if (event.kind === 'permission_resolved' || event.kind === 'permission_cancelled') {
+        clearWaitingRequest(eventRequestId, eventSessionId);
+      } else if (event.kind === 'complete' && eventSessionId) {
+        clearWaitingSession(eventSessionId);
+      }
+
+      // DHC CLI: the amber dot used to light on any event from another session, even mid-stream, which
+      // made it a second "running" indicator. Now it means "finished or waiting on you and not yet
+      // looked at": a completed run, a permission / AskUserQuestion prompt, or an error.
+      const needsYou = event.kind === 'permission_request'
+        || event.kind === 'error'
+        || (event.kind === 'complete' && !event.aborted);
+      // DHC CLI 靜音模式: a shared session this device's person muted lights nothing and sends no notification.
+      const mutedHere = Boolean(eventSessionId && isCoMuted(eventSessionId, resolveSettingsProjectId(projectsRef.current)));
+      if (eventSessionId && needsYou && !mutedHere) {
         markSessionAttention(eventSessionId);
+
+        // DHC CLI: browser notification for the same three moments (the module decides whether the
+        // user opted in, whether the tab is in front, and whether this event kind is switched on).
+        const eventRecord = event as unknown as Record<string, unknown>;
+        const sessionLabel = (() => {
+          for (const project of projectsRef.current) {
+            const match = getProjectSessions(project).find((session) => session.id === eventSessionId);
+            if (match) return getSessionTitle(match);
+          }
+          return '';
+        })();
+        const viewedNow = eventSessionId === viewedSessionId;
+        if (event.kind === 'permission_request') {
+          const toolName = typeof eventRecord.toolName === 'string' ? eventRecord.toolName : '';
+          const input = eventRecord.input as { questions?: Array<{ question?: string }> } | undefined;
+          const question = input?.questions?.[0]?.question;
+          notifyBrowser({
+            kind: 'actionRequired',
+            sessionId: eventSessionId,
+            title: toolName === 'AskUserQuestion' ? 'Claude 在等你回答' : 'Claude 在等你授權',
+            body: [sessionLabel, question || (toolName ? `工具：${toolName}` : '')].filter(Boolean).join('\n'),
+          });
+        } else if (event.kind === 'error') {
+          notifyBrowser({ kind: 'error', sessionId: eventSessionId, title: '執行出錯了', body: sessionLabel });
+        } else if (!viewedNow || typeof document === 'undefined' || document.visibilityState !== 'visible' || !document.hasFocus()) {
+          notifyBrowser({ kind: 'stop', sessionId: eventSessionId, title: 'Claude 回覆完成', body: sessionLabel });
+        }
       }
 
       if (event.kind !== 'session_upserted') {
@@ -774,9 +840,9 @@ export function useProjectsState({
         && !isSessionProcessing(upsert.sessionId)
       ) {
         setExternalMessageUpdate((prev) => prev + 1);
-      } else {
-        markSessionAttention(upsert.sessionId);
       }
+      // DHC CLI: a transcript write alone no longer marks a session (it fired for every run, including
+      // sessions driven from the CLI or the desktop app on this machine); complete / permission / error do.
 
       setProjects((previousProjects) => {
         const targetProjectId = upsert.project?.projectId;
@@ -873,6 +939,21 @@ export function useProjectsState({
   useEffect(() => {
     clearSessionAttention(selectedSession?.id ?? sessionId ?? null);
   }, [clearSessionAttention, selectedSession?.id, sessionId]);
+
+  // DHC CLI: a mark set on the viewed session while the tab was hidden clears once the user is back.
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const handleReturn = () => {
+      if (document.visibilityState !== 'visible') return;
+      clearSessionAttention(selectedSessionRef.current?.id ?? sessionId ?? null);
+    };
+    document.addEventListener('visibilitychange', handleReturn);
+    window.addEventListener('focus', handleReturn);
+    return () => {
+      document.removeEventListener('visibilitychange', handleReturn);
+      window.removeEventListener('focus', handleReturn);
+    };
+  }, [clearSessionAttention, sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -1062,6 +1143,8 @@ export function useProjectsState({
   const handleSessionDelete = useCallback(
     (sessionIdToDelete: string) => {
       clearSessionAttention(sessionIdToDelete);
+      forgetSessionInBoxes(sessionIdToDelete);
+      forgetCoSession(sessionIdToDelete);
 
       if (selectedSession?.id === sessionIdToDelete) {
         setSelectedSession(null);
@@ -1074,6 +1157,9 @@ export function useProjectsState({
     },
     [clearSessionAttention, navigate, selectedSession?.id],
   );
+
+  // DHC CLI 快閃任務區: the sidebar × and the header button delete without going through the sidebar's dialog.
+  useEffect(() => onFlashSessionEnded(handleSessionDelete), [handleSessionDelete]);
 
   const handleSidebarRefresh = useCallback(async () => {
     try {
@@ -1197,7 +1283,7 @@ export function useProjectsState({
       isLoading: isLoadingProjects,
       loadingProgress,
       onRefresh: handleSidebarRefresh,
-      onShowSettings: () => setShowSettings(true),
+      onShowSettings: () => openSettings('agents'),
       showSettings,
       settingsInitialTab,
       onCloseSettings: () => setShowSettings(false),

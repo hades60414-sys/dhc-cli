@@ -36,6 +36,8 @@ const voiceService = createVoiceService({
 });
 
 const audioUpload = multer({
+
+  defParamCharset: 'utf8', // DHC CLI: browsers send UTF-8 filenames; multer defaults to latin1 (mojibake for Chinese)
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 });

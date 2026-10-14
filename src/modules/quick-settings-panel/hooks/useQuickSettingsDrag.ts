@@ -5,9 +5,14 @@ import type { QuickSettingsHandleStyle } from '@/shared/types';
 
 const HANDLE_POSITION_STORAGE_KEY = 'quickSettingsHandlePosition';
 
-const DEFAULT_HANDLE_POSITION = 50;
 const HANDLE_POSITION_MIN = 10;
 const HANDLE_POSITION_MAX = 90;
+// DHC：桌面預設放到最低（跟輸入框同一排），不擋訊息區右緣的對話跳轉拉桿。手機的位置是從底部算，
+// 右緣不是拉桿就是輸入框，維持原本的中間。
+const DEFAULT_DESKTOP_POSITION = HANDLE_POSITION_MAX;
+const DEFAULT_MOBILE_POSITION = 50;
+// 舊版每次載入都把預設值 50 存起來；存的剛好是 50 就當作沒拖過，新預設才吃得到。
+const LEGACY_SAVED_DEFAULT = 50;
 const DRAG_THRESHOLD_PX = 5;
 
 type UseQuickSettingsDragProps = {
@@ -22,27 +27,27 @@ const clampPosition = (value: number): number => (
   Math.max(HANDLE_POSITION_MIN, Math.min(HANDLE_POSITION_MAX, value))
 );
 
-const readHandlePosition = (): number => {
+/** The position the user dragged to on this browser, or null when they never moved it. */
+const readSavedPosition = (): number | null => {
   if (typeof window === 'undefined') {
-    return DEFAULT_HANDLE_POSITION;
+    return null;
   }
 
   const saved = localStorage.getItem(HANDLE_POSITION_STORAGE_KEY);
   if (!saved) {
-    return DEFAULT_HANDLE_POSITION;
+    return null;
   }
 
   try {
     const parsed = JSON.parse(saved) as { y?: unknown };
-    if (typeof parsed.y === 'number' && Number.isFinite(parsed.y)) {
+    if (typeof parsed.y === 'number' && Number.isFinite(parsed.y) && parsed.y !== LEGACY_SAVED_DEFAULT) {
       return clampPosition(parsed.y);
     }
   } catch {
     localStorage.removeItem(HANDLE_POSITION_STORAGE_KEY);
-    return DEFAULT_HANDLE_POSITION;
   }
 
-  return DEFAULT_HANDLE_POSITION;
+  return null;
 };
 
 const isTouchEvent = (event: { type: string }): boolean => event.type.includes('touch');
@@ -58,12 +63,13 @@ const getClientY = (event: EventWithClientY): number | null => {
 };
 
 export function useQuickSettingsDrag({ isMobile }: UseQuickSettingsDragProps) {
-  const [handlePosition, setHandlePosition] = useState<number>(readHandlePosition);
+  const [savedPosition, setSavedPosition] = useState<number | null>(readSavedPosition);
+  const handlePosition = savedPosition ?? (isMobile ? DEFAULT_MOBILE_POSITION : DEFAULT_DESKTOP_POSITION);
   const [isPointerDown, setIsPointerDown] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
   const dragStartYRef = useRef<number | null>(null);
-  const dragStartPositionRef = useRef(DEFAULT_HANDLE_POSITION);
+  const dragStartPositionRef = useRef(handlePosition);
   const didDragRef = useRef(false);
   const suppressNextClickRef = useRef(false);
   const bodyStylesAppliedRef = useRef(false);
@@ -143,7 +149,7 @@ export function useQuickSettingsDrag({ isMobile }: UseQuickSettingsDragProps) {
       const viewportHeight = Math.max(window.innerHeight, 1);
       const normalizedDelta = (rawDelta / viewportHeight) * 100;
       const positionDelta = isMobile ? -normalizedDelta : normalizedDelta;
-      setHandlePosition(clampPosition(dragStartPositionRef.current + positionDelta));
+      setSavedPosition(clampPosition(dragStartPositionRef.current + positionDelta));
     },
     [applyBodyDragStyles, isMobile, isPointerDown],
   );
@@ -163,13 +169,17 @@ export function useQuickSettingsDrag({ isMobile }: UseQuickSettingsDragProps) {
     setIsPointerDown(true);
   }, [handlePosition]);
 
-  // Persist drag-handle position so users keep their preferred quick-access location.
+  // Persist only a position the user dragged to, so a later default change still reaches untouched browsers.
   useEffect(() => {
+    if (savedPosition === null) {
+      return;
+    }
+
     localStorage.setItem(
       HANDLE_POSITION_STORAGE_KEY,
-      JSON.stringify({ y: handlePosition }),
+      JSON.stringify({ y: savedPosition }),
     );
-  }, [handlePosition]);
+  }, [savedPosition]);
 
   useEffect(() => {
     if (!isPointerDown) {

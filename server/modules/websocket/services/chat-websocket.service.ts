@@ -154,7 +154,35 @@ async function handleChatSend(
     return;
   }
 
+  // DHC CLI: `interruptActiveRun: true` is the composer's "send now" while a turn is going — the same
+  // Codex-style steer the user expects instead of stopping the session by hand and re-sending.
+  if (data.interruptActiveRun === true) {
+    await interruptActiveRun(resolved.sessionId, dependencies);
+  }
+
   await dispatchRun(ws, userId, resolved.sessionId, resolved.session, data, dependencies);
+}
+
+/**
+ * Cancels a running turn and emits the terminal `complete` on its behalf, so
+ * every watching client sees the interrupted run end before the next turn's
+ * stream begins. The interrupted run's own dispatch settles later through
+ * completeRunIfCurrent, which is scoped to that run and cannot touch the one
+ * started after this. No-op when nothing is running.
+ */
+async function interruptActiveRun(
+  sessionId: string,
+  dependencies: ChatWebSocketDependencies,
+): Promise<void> {
+  const activeRun = chatRunRegistry.getRun(sessionId);
+  if (!activeRun || activeRun.status !== 'running') {
+    return;
+  }
+  const aborted = await dependencies.runtime.abort(activeRun.provider, sessionId);
+  chatRunRegistry.completeRun(sessionId, {
+    exitCode: aborted ? 0 : 1,
+    aborted: true,
+  });
 }
 
 type ResolvedSendTarget = {
@@ -578,16 +606,7 @@ export async function runDetachedChatTurn(
     if (!input.interruptActiveRun) {
       return { started: false, error: 'A run was already in progress for this session.' };
     }
-    // Same shape as `chat.abort`: cancel the provider run and emit the
-    // terminal `complete` on its behalf, so every watching client sees the
-    // interrupted run end before this turn's stream begins. The interrupted
-    // run's own dispatch settles later through completeRunIfCurrent, which is
-    // scoped to that run and cannot touch the one started here.
-    const aborted = await dependencies.runtime.abort(activeRun.provider, input.sessionId);
-    chatRunRegistry.completeRun(input.sessionId, {
-      exitCode: aborted ? 0 : 1,
-      aborted: true,
-    });
+    await interruptActiveRun(input.sessionId, dependencies);
   }
 
   return dispatchRun(

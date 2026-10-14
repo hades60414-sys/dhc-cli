@@ -119,24 +119,29 @@
     "attachImages": "Attach images",
     "send": "Send",
     "stop": "Stop",
+    "sendNow": "Send now (interrupts the current turn)",
+    "placeholderAnswer": "Or type your answer here…",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
       "enter": "Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
       "queue": "Enter to queue your next message",
-      "updateQueued": "Enter to update queued message"
+      "updateQueued": "Enter to update queued message",
+      "sendNow": "Enter sends now and interrupts the current turn • Queue sends after it finishes",
+      "answerQuestion": "Enter sends your text as the answer to the question above"
     },
     "clickToChangeMode": "Click to change permission mode (or press Tab in input)",
     "showAllCommands": "Show all commands",
     "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom",
     "queue": {
-      "sendNext": "Queue next message",
-      "update": "Update queued message",
+      "sendNext": "Queue: send after this turn finishes",
+      "update": "Replace the queued message",
       "label": "Queued",
-      "willSend": "Will send when this finishes",
-      "edit": "Edit queued message",
+      "willSend": "Sends when this turn finishes; click the text to take it back",
+      "edit": "Take back into the box to edit",
       "delete": "Delete queued message"
-    }
+    },
+    "newMessages": "{{count}} new messages"
   },
   "composer": {
     "reasoning": "Reasoning",
@@ -282,6 +287,44 @@
       "description": "Every message, unformatted, for tooling."
     }
   },
+  "nightQueue": {
+    "label": "Defer",
+    "toggleOn": "Night mode: prompts you send are stored and run one at a time, in order, from 02:00; start one with @12:05 to give it its own time",
+    "toggleOff": "Turn night mode off (if prompts are waiting, you choose: run them now or cancel them)",
+    "banner": "Night mode is on: prompts you send are stored and run one at a time, in the order stored, from 02:00. Nothing new starts after 07:00; what is left runs the next night. Start a prompt with @12:05 to run that one at 12:05 (@重置 = when the quota resets). Press the moon again to run them now or cancel them.",
+    "bannerBypass": "They run with bypass (no approvals; deleting data, payments, permission changes and anything sent outside are still skipped and noted for you).",
+    "bypassQuestion": {
+      "title": "Night mode",
+      "body": "Nobody is there at night to approve tools. Run this chat's stored prompts with bypass? Without it, anything needing approval is skipped. Deleting data, payments, permission changes and anything sent outside are skipped and noted for you either way.",
+      "yes": "Turn on with bypass",
+      "no": "Turn on without bypass",
+      "cancel": "Cancel"
+    },
+    "placeholder": "Night mode: prompts are stored and run in order from 02:00; start with @12:05 for a time of its own…",
+    "hint": "Enter stores it • start with @12:05 for its own time, @重置 for the quota reset",
+    "store": "Store for tonight",
+    "status": {
+      "waiting": "Starts at 02:00 · #{{position}} in the queue",
+      "waitingInWindow": "Queued · #{{position}} in the queue",
+      "waitingAlarm": "Starts at {{time}} · #{{position}} in the queue",
+      "runNow": "Running soon · #{{position}} in the queue",
+      "retrying": "Did not finish last time ({{reason}}); will retry · #{{position}} in the queue",
+      "running": "Running",
+      "failed": "Did not finish: {{reason}}"
+    },
+    "attachments_one": "{{count}} file attached",
+    "attachments_other": "{{count}} files attached",
+    "cancelItem": "Cancel this prompt",
+    "dismiss": "Dismiss",
+    "confirm": {
+      "title": "Turn off night mode",
+      "body_one": "{{count}} prompt in this chat is waiting for tonight. Run it now, or cancel it?",
+      "body_other": "{{count}} prompts in this chat are waiting for tonight. Run them now, or cancel them?",
+      "runNow": "Run now",
+      "cancelAll": "Cancel all",
+      "back": "Back"
+    }
+  },
   "schedule": {
     "trigger": "Schedule this message",
     "heading": "Send later",
@@ -327,7 +370,8 @@
       "status": "Inspect runtime, version, provider, and environment status.",
       "memory": "Open the project CLAUDE.md memory file.",
       "config": "Open settings and configuration.",
-      "help": "Show command documentation and syntax."
+      "help": "Show command documentation and syntax.",
+      "clear": "Start a fresh conversation in this project (context reset)."
     },
     "modalMeta": {
       "helpEyebrow": "Command center",

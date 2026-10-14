@@ -96,6 +96,42 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 `;
 
+// DHC CLI: the night queue. A session in night mode holds its prompts here instead of sending them; they
+// run one at a time, in the order they were stored, from 02:00 (or at once when the user says "run now").
+export const NIGHT_QUEUE_TABLES_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS night_queue_items (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    -- Composer preferences and uploaded attachments as they were when the prompt was stored.
+    options TEXT NOT NULL DEFAULT '{}',
+    -- pending | running | done | failed | cancelled
+    status TEXT NOT NULL DEFAULT 'pending',
+    -- 1 once the user chose "run now": the item goes ahead of the night queue and ignores the window.
+    run_now INTEGER NOT NULL DEFAULT 0,
+    -- Runs started. More than one means an earlier run was cut off by a server restart.
+    attempts INTEGER NOT NULL DEFAULT 0,
+    failure_reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    -- UTC ISO instant of an alarm ("wake at 12:05"); NULL = the nightly 02:00-07:00 window.
+    start_at TEXT,
+    -- 1 = the user agreed to run it with bypassPermissions (nobody is there to approve tools).
+    use_bypass INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+-- One row per session whose composer is in night mode, with the settings new prompts are stored under.
+CREATE TABLE IF NOT EXISTS night_queue_sessions (
+    session_id TEXT PRIMARY KEY,
+    enabled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    start_at TEXT,
+    use_bypass INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+`;
+
 export const SCHEDULED_MESSAGES_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS scheduled_messages (
     id TEXT PRIMARY KEY,

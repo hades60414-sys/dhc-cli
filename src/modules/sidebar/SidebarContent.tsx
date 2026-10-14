@@ -1,14 +1,18 @@
 import { type ReactNode } from 'react';
-import { Activity, Archive, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
+import { Activity, Archive, BookOpen, Folder, MessageSquare, Plus, Repeat, RotateCcw, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { LLMProviderLogo, ScrollArea } from '@/shared/ui';
+import { api } from '@/shared/api';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, ConversationSearchResults, Project, RecentConversationListItem, ReleaseInfo, SearchProgress, SidebarProjectListProps, SidebarSearchMode } from '@/shared/types';
+import { flashTrashDaysLeft, isFlashProject, useFlashTrash } from '@/shared/flashTasks';
 import { formatCompactAge, getAllSessions } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import SidebarFooter from '@/modules/sidebar/SidebarFooter';
 import SidebarHeader from '@/modules/sidebar/SidebarHeader';
 import SidebarProjectList from '@/modules/sidebar/SidebarProjectList';
 import SidebarRecentConversations from '@/modules/sidebar/SidebarRecentConversations';
+import { ROUTINE_PROJECT_FOLDER } from '@/modules/sidebar/hooks/useSidebarController';
+import { getDhcConfig } from '@/shared/dhcConfig';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
   const parts: ReactNode[] = [];
@@ -175,7 +179,10 @@ export default function SidebarContent({
   projectListProps,
   t,
 }: SidebarContentProps) {
-  const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
+  // DHC CLI：「專案」分頁的搜尋也找對話；名稱符合的專案列在最上面。
+  const showConversationSearch = (searchMode === 'conversations' || searchMode === 'projects')
+    && searchFilter.trim().length >= 2;
+  const matchedProjects = searchMode === 'projects' ? projectListProps.filteredProjects : [];
   const hasSearchResults = Boolean(
     conversationResults
     && (conversationResults.titleResults.length > 0 || conversationResults.results.length > 0),
@@ -183,6 +190,28 @@ export default function SidebarContent({
   const groupedArchivedSessions = groupArchivedSessionsByProject(archivedSessions);
   const visibleArchivedItemsCount = archivedProjects.length + archivedSessions.length;
   const isRenamingOnMobile = isMobile && projectListProps.activeRename !== null;
+  const flashProjectIds = new Set(projects.filter(isFlashProject).map((project) => project.projectId));
+  const flashTrash = useFlashTrash();
+
+  // DHC CLI：新增例行工作＝在工作區根目錄的「例行工作」下建資料夾並註冊成專案（伺服器會建資料夾）。
+  const handleCreateRoutine = async () => {
+    const workspaceRoot = getDhcConfig().workspaceRootPath;
+    const name = window.prompt('例行工作名稱（例：月報）')?.trim();
+    if (!workspaceRoot || !name) {
+      return;
+    }
+    if (/[\\/:*?"<>|]/.test(name)) {
+      window.alert('名稱不能有 \\ / : * ? " < > | 這些符號。');
+      return;
+    }
+    const separator = workspaceRoot.includes('\\') ? '\\' : '/';
+    const response = await api.createProject({ path: [workspaceRoot, ROUTINE_PROJECT_FOLDER, name].join(separator), customName: name });
+    if (!response.ok) {
+      window.alert('建立失敗，請再試一次。');
+      return;
+    }
+    onRefresh();
+  };
 
   return (
     <div
@@ -206,10 +235,22 @@ export default function SidebarContent({
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
         onCollapseSidebar={onCollapseSidebar}
+        currentVersion={currentVersion}
         t={t}
       />
 
       <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
+        {showConversationSearch && matchedProjects.length > 0 && (
+          <section className="mb-3" aria-labelledby="project-name-results-heading">
+            <h3
+              id="project-name-results-heading"
+              className="px-3 py-0.5 text-[11px] font-medium text-muted-foreground"
+            >
+              {t('search.modeProjects')}
+            </h3>
+            <SidebarProjectList {...projectListProps} />
+          </section>
+        )}
         {showConversationSearch ? (
           isSearching && !conversationResults ? (
             <div className="px-4 py-12 text-center md:py-8">
@@ -223,7 +264,7 @@ export default function SidebarContent({
                 </p>
               )}
             </div>
-          ) : !isSearching && conversationResults && !hasSearchResults ? (
+          ) : !isSearching && conversationResults && !hasSearchResults && matchedProjects.length === 0 ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
                 <Search className="h-6 w-6 text-muted-foreground" />
@@ -300,24 +341,29 @@ export default function SidebarContent({
                     </span>
                   </div>
 
-                  {isSearching && searchProgress && (
+                  {/* DHC CLI：標題結果一來就畫出這區，內容還在掃時也要看得到「搜尋中」，不然「0 個符合」像是沒找到。 */}
+                  {isSearching && (
                     <div className="space-y-1.5 px-1">
                       <div className="flex items-center justify-end gap-1.5">
                         <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-muted-foreground/40 border-t-primary" />
                         <p className="text-[10px] text-muted-foreground/60">
-                          {searchProgress.scannedProjects}/{searchProgress.totalProjects}
+                          {searchProgress
+                            ? `${searchProgress.scannedProjects}/${searchProgress.totalProjects}`
+                            : t('search.searching')}
                         </p>
                       </div>
-                      <div className="h-0.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full bg-primary/60 transition-all duration-300"
-                          style={{
-                            width: `${searchProgress.totalProjects > 0
-                              ? Math.round((searchProgress.scannedProjects / searchProgress.totalProjects) * 100)
-                              : 0}%`,
-                          }}
-                        />
-                      </div>
+                      {searchProgress && (
+                        <div className="h-0.5 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary/60 transition-all duration-300"
+                            style={{
+                              width: `${searchProgress.totalProjects > 0
+                                ? Math.round((searchProgress.scannedProjects / searchProgress.totalProjects) * 100)
+                                : 0}%`,
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -376,6 +422,15 @@ export default function SidebarContent({
             </div>
           ) : null
         ) : searchMode === 'conversations' ? (
+          <>
+          <button
+            onClick={() => onSearchModeChange('archived')}
+            className="mx-2 mb-1 flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          >
+            <Archive className="h-3 w-3" />
+            {t('search.archiveOnlyTooltip', 'Archive only')}
+            {archivedSessionsCount > 0 && <span className="text-muted-foreground/60">{archivedSessionsCount}</span>}
+          </button>
           <SidebarRecentConversations
             conversations={recentConversations}
             total={recentConversationsTotal}
@@ -389,8 +444,60 @@ export default function SidebarContent({
             onConversationSelect={onConversationResultClick}
             onLoadMore={onLoadMoreRecentConversations}
             onRetry={onRetryRecentConversations}
+            flashProjectIds={flashProjectIds}
             t={t}
           />
+          </>
+        ) : searchMode === 'routine' ? (
+          <div className="space-y-2">
+            <div className="mx-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2.5 text-xs leading-relaxed text-foreground">
+              <div className="mb-1 flex items-center gap-1.5 font-medium">
+                <Repeat className="h-3.5 w-3.5 text-primary" />
+                例行工作
+              </div>
+              <p className="text-muted-foreground">
+                每月、每季重複做的報告。在要做的那項按「新增工作階段」，說「更新10月」，就照上次的做法和資料產出新的一期。
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                第一次做的項目，先把上一期的檔案和做法丟給它，它會整理成這項的規格，之後就能一句話更新。
+              </p>
+              <button
+                onClick={handleCreateRoutine}
+                className="mt-2 flex items-center gap-1 rounded-md border border-primary/30 px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/10"
+              >
+                <Plus className="h-3 w-3" />
+                新增例行工作
+              </button>
+            </div>
+            {projectListProps.filteredProjects.length === 0 ? (
+              <p className="px-4 py-4 text-center text-xs text-muted-foreground">還沒有例行工作。</p>
+            ) : (
+              <SidebarProjectList {...projectListProps} />
+            )}
+          </div>
+        ) : searchMode === 'query' ? (
+          <div className="space-y-2">
+            <div className="mx-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2.5 text-xs leading-relaxed text-foreground">
+              <div className="mb-1 flex items-center gap-1.5 font-medium">
+                <BookOpen className="h-3.5 w-3.5 text-primary" />
+                查詢專區
+              </div>
+              <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+                <li>DHC CLI 教學：側欄各分頁怎麼用、例行工作怎麼建、快捷鍵</li>
+              </ul>
+              <p className="mt-1 text-muted-foreground">
+                這裡要接你自己的文件／資料庫問答。需要自己建一個 RAG，做法見 docs/build-your-own-rag.md。
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                在要問的專區按「新增工作階段」開新查詢。
+              </p>
+            </div>
+            {projectListProps.filteredProjects.length === 0 ? (
+              <p className="px-4 py-4 text-center text-xs text-muted-foreground">查詢工作區尚未建立：重啟伺服器會自動建立教學專區。</p>
+            ) : (
+              <SidebarProjectList {...projectListProps} />
+            )}
+          </div>
         ) : searchMode === 'running' ? (
           projectListProps.filteredProjects.length === 0 ? (
             <div className="px-4 py-12 text-center md:py-8">
@@ -652,6 +759,17 @@ export default function SidebarContent({
                                   </span>
                                 </>
                               )}
+                              {flashTrash[session.sessionId] && (
+                                <>
+                                  <span aria-hidden>·</span>
+                                  <span
+                                    className="whitespace-nowrap text-amber-600 dark:text-amber-400"
+                                    title="快閃任務：到期自動永久刪除，之前按右邊的還原就會留下"
+                                  >
+                                    {flashTrashDaysLeft(flashTrash[session.sessionId], projectListProps.currentTime.getTime())} 天後刪除
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                         </button>
@@ -691,7 +809,6 @@ export default function SidebarContent({
           restartRequired={restartRequired}
           releaseInfo={releaseInfo}
           latestVersion={latestVersion}
-          currentVersion={currentVersion}
           onShowVersionModal={onShowVersionModal}
           onShowSettings={onShowSettings}
           t={t}

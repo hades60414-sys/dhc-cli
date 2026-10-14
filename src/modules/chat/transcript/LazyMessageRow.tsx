@@ -34,6 +34,8 @@ type LazyMessageRowProps = {
    * placeholder and mounts when scrolled toward.
    */
   initiallyNearViewport: boolean;
+  /** DHC CLI 對話跳轉: set on prompt rows so the jump rail can find them, mounted or not. */
+  jumpAnchor?: string;
   children: ReactNode;
 };
 
@@ -41,6 +43,7 @@ export default function LazyMessageRow({
   lazyRows,
   timestamp,
   initiallyNearViewport,
+  jumpAnchor,
   children,
 }: LazyMessageRowProps) {
   const [isNearViewport, setIsNearViewport] = useState(initiallyNearViewport);
@@ -71,6 +74,7 @@ export default function LazyMessageRow({
     <div
       ref={elementRef}
       data-message-timestamp={timestamp || undefined}
+      data-jump-anchor={jumpAnchor}
       style={isMounted ? undefined : { height: measuredHeight ?? ESTIMATED_ROW_HEIGHT_PX }}
     >
       {isMounted ? children : null}

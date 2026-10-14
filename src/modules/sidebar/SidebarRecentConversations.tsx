@@ -5,8 +5,12 @@ import type { TFunction } from 'i18next';
 import { Button, LLMProviderLogo, Tooltip } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import type { ProjectSession, RecentConversationListItem, SessionRowActions } from '@/shared/types';
+import { describeBackgroundWork, useBackgroundWorkMap } from '@/shared/backgroundWork';
 import { formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
+import BackgroundWorkIndicator, { RunningHeartbeat, WaitingIndicator } from '@/modules/sidebar/BackgroundWorkIndicator';
+import { useWaitingMap } from '@/shared/waitingOnYou';
 import SessionOptions from '@/modules/sidebar/SessionOptions';
+import SessionTypeBadge from '@/modules/sidebar/SessionTypeBadge';
 
 type SidebarRecentConversationsProps = {
   conversations: RecentConversationListItem[];
@@ -29,8 +33,12 @@ type SidebarRecentConversationsProps = {
   ) => void;
   onLoadMore: () => void;
   onRetry: () => void;
+  /** DHC CLI: projects that are the 快閃任務區, so their rows get the bolt. */
+  flashProjectIds?: ReadonlySet<string>;
   t: TFunction;
 };
+
+const NO_FLASH_PROJECTS: ReadonlySet<string> = new Set();
 
 function RecentConversationSkeleton() {
   return (
@@ -62,8 +70,13 @@ export default function SidebarRecentConversations({
   onConversationSelect,
   onLoadMore,
   onRetry,
+  flashProjectIds = NO_FLASH_PROJECTS,
   t,
 }: SidebarRecentConversationsProps) {
+  // Hooks stay above the early returns below (a hook after them crashes the list when it fills in, React #310).
+  const backgroundWorkById = useBackgroundWorkMap();
+  const waitingById = useWaitingMap();
+
   if (isLoading && conversations.length === 0) {
     return <RecentConversationSkeleton />;
   }
@@ -110,6 +123,9 @@ export default function SidebarRecentConversations({
           const isSelected = String(selectedSession?.id ?? '') === conversation.sessionId;
           const age = formatCompactAge(conversation.lastActivity, currentTime);
           const isProcessing = sessionActions.activeSessions.has(conversation.sessionId);
+          // DHC CLI: turn over, subagents / background shells still running — violet light.
+          const backgroundWork = isProcessing ? undefined : backgroundWorkById.get(conversation.sessionId);
+          const waitingKind = waitingById.get(conversation.sessionId) ?? null;
           const showAttentionIndicator =
             sessionActions.attentionSessionIds.has(conversation.sessionId) && !isSelected;
           // Resolved per row so a keystroke in one rename does not redraw the rest.
@@ -131,11 +147,12 @@ export default function SidebarRecentConversations({
 
           return (
             <div key={conversation.sessionId} className="group relative">
-              {/*
-                * Only the amber "needs attention" dot, and the spinner below. The
-                * Projects row also has a green dot for a session touched recently,
-                * which carries no information in a list ordered by recency.
-                */}
+              {/* Amber "needs attention" dot, else the green heartbeat while it runs (subagents included). */}
+              {!showAttentionIndicator && (isProcessing || backgroundWork) && (
+                <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
+                  <RunningHeartbeat label={isProcessing || !backgroundWork ? '執行中' : describeBackgroundWork(backgroundWork)} />
+                </div>
+              )}
               {showAttentionIndicator && (
                 <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
                   <Tooltip
@@ -157,30 +174,45 @@ export default function SidebarRecentConversations({
                 data-testid="recent-conversation-row"
                 className={cn(
                   'flex min-w-0 items-center gap-2 rounded-lg px-2 py-2 pr-11 text-left transition-colors',
+                  // DHC CLI: the open conversation stands out at a glance — tinted, outlined, a bar down its left edge.
                   isSelected
-                    ? 'bg-primary/10 text-foreground'
+                    ? 'bg-primary/20 text-foreground shadow-[inset_3px_0_0_0_hsl(var(--primary))] ring-1 ring-inset ring-primary/50'
                     : 'text-foreground hover:bg-accent/60',
                 )}
               >
                 <span className={cn(
-                  'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
-                  isSelected ? 'bg-primary/10' : 'bg-muted/60',
+                  'relative flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
+                  isSelected ? 'bg-primary/30' : 'bg-muted/60',
                 )}>
                   <LLMProviderLogo provider={conversation.provider} className="h-3.5 w-3.5" />
+                  <SessionTypeBadge
+                    sessionId={conversation.sessionId}
+                    isFlash={Boolean(conversation.projectId && flashProjectIds.has(conversation.projectId))}
+                  />
                 </span>
 
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-normal leading-4">
+                  <span className={cn('block truncate text-[13px] leading-4', isSelected ? 'font-semibold' : 'font-normal')}>
                     {conversation.sessionTitle}
                   </span>
                   <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-3 text-muted-foreground">
                     <span className="truncate">{conversation.projectDisplayName}</span>
-                    {isProcessing ? (
+                    {waitingKind ? (
+                      <>
+                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
+                        <WaitingIndicator kind={waitingKind} className="h-4 w-4 flex-shrink-0" position="right" />
+                      </>
+                    ) : isProcessing ? (
                       <>
                         <span className="flex-shrink-0 text-muted-foreground/40">·</span>
                         <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
                           <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" />
                         </Tooltip>
+                      </>
+                    ) : backgroundWork ? (
+                      <>
+                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
+                        <BackgroundWorkIndicator label={describeBackgroundWork(backgroundWork)} className="h-3 w-3 flex-shrink-0" position="right" />
                       </>
                     ) : age && (
                       <>

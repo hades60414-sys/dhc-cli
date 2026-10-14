@@ -184,6 +184,8 @@ export function useSlashCommands({
         const skillCommands = dedupeProviderSkills(skillsData?.data?.skills || [])
           .map(mapSkillToSlashCommand);
         const allCommands: SlashCommand[] = [
+          // DHC CLI: client-side commands, listed so they show in the menu and autocomplete like the rest.
+          { name: '/review', description: '審查這個 session 改過的程式：只找邏輯、數字、安全問題，不管風格', type: 'built-in' },
           ...((data.builtIn || []) as SlashCommand[]).map((command) => ({
             ...command,
             type: 'built-in',

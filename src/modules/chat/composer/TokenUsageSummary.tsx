@@ -45,6 +45,9 @@ function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryProps) {
   const inputTokens = readUsageNumber(usage?.inputTokens ?? breakdown?.input);
   const outputTokens = readUsageNumber(usage?.outputTokens ?? breakdown?.output);
   const usedTokens = readUsageNumber(usage?.used) || inputTokens + outputTokens;
+  // DHC CLI addition: show context-window percentage like Claude Code's status line.
+  const totalTokens = readUsageNumber(usage?.total);
+  const contextPct = totalTokens > 0 ? Math.min(100, Math.round((usedTokens / totalTokens) * 100)) : null;
 
   return (
     <button
@@ -58,8 +61,13 @@ function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryProps) {
         <ActivityIcon className="h-3.5 w-3.5" />
       </span>
       <span className="font-medium text-foreground">{formatTokenCount(usedTokens)}</span>
+      {contextPct !== null && (
+        <span className={`font-medium ${contextPct >= 90 ? 'text-red-600 dark:text-red-400' : contextPct >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
+          {contextPct}%
+        </span>
+      )}
       <span className="hidden text-muted-foreground/70 sm:inline">
-        {t('chat:misc.tokensLabel', { count: usedTokens })}
+        {contextPct !== null ? `上下文 / ${formatTokenCount(totalTokens)}` : t('chat:misc.tokensLabel', { count: usedTokens })}
       </span>
     </button>
   );

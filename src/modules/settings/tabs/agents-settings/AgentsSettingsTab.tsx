@@ -4,6 +4,7 @@ import type { AgentCategory, AgentContextByProvider, AgentProvider, AgentSetting
 import AgentCategoryContentSection from '@/modules/settings/tabs/agents-settings/sections/AgentCategoryContentSection';
 import AgentCategoryTabsSection from '@/modules/settings/tabs/agents-settings/sections/AgentCategoryTabsSection';
 import AgentSelectorSection from '@/modules/settings/tabs/agents-settings/sections/AgentSelectorSection';
+import { filterEnabledAgents, useEnabledAgents } from '@/shared/dhcConfig';
 
 type ProviderAuthStatusByProvider = Record<AgentProvider, ProviderAuthStatus>;
 
@@ -39,9 +40,11 @@ export default function AgentsSettingsTab({
       : ['account', 'permissions', 'mcp', 'skills']
   ), [selectedAgent]);
 
-  const visibleAgents = useMemo<AgentProvider[]>(() => {
-    return ['claude', 'cursor', 'codex', 'opencode'];
-  }, []);
+  const enabledAgents = useEnabledAgents();
+  const visibleAgents = useMemo<AgentProvider[]>(
+    () => filterEnabledAgents<AgentProvider>(['claude', 'cursor', 'codex', 'opencode'], (agent) => agent, enabledAgents),
+    [enabledAgents],
+  );
 
   const agentContextById = useMemo<AgentContextByProvider>(() => ({
     claude: {

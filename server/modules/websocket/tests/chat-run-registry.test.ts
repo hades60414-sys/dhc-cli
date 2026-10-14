@@ -311,3 +311,70 @@ test('startRun rejects a second concurrent run for the same session', async () =
     assert.ok(third);
   });
 });
+
+test('DHC CLI: run-completed listeners fire once per terminal complete, including an abort', async () => {
+  await withIsolatedDatabase(async () => {
+    sessionsDb.createAppSession('app-run-9', 'claude', '/workspace/demo');
+    const completed: string[] = [];
+    const unsubscribe = chatRunRegistry.onRunCompleted((appSessionId) => {
+      completed.push(appSessionId);
+    });
+
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-9',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: new FakeConnection(),
+      userId: 'user-1',
+    });
+    assert.ok(run);
+
+    // The abort path emits the synthetic complete; the runtime's own late
+    // complete is a duplicate and must not notify again.
+    chatRunRegistry.completeRun('app-run-9', { exitCode: 0, aborted: true });
+    run.writer.send({ kind: 'complete', provider: 'claude', sessionId: 'provider-id-9', exitCode: 0 });
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+
+    assert.deepEqual(completed, ['app-run-9']);
+
+    unsubscribe();
+    const second = chatRunRegistry.startRun({
+      appSessionId: 'app-run-9',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: new FakeConnection(),
+      userId: 'user-1',
+    });
+    assert.ok(second);
+    chatRunRegistry.completeRun('app-run-9', { exitCode: 0 });
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    assert.deepEqual(completed, ['app-run-9'], 'an unsubscribed listener stays quiet');
+  });
+});
+
+test('DHC CLI: background work merges a session\'s CLI processes and clears per process', () => {
+  // A new turn can start while the previous CLI is still winding down its background agents, so one
+  // session may have two processes reporting. Each clears only its own entry when it exits.
+  const winding = {};
+  const current = {};
+  const agent = { type: 'local_agent', description: 'review' };
+  const shell = { type: 'local_bash', description: 'npm test' };
+
+  try {
+    chatRunRegistry.setBackgroundWork('app-bg-1', winding, { tasks: [agent], followUp: false, since: 200 });
+    chatRunRegistry.setBackgroundWork('app-bg-1', current, { tasks: [shell], followUp: true, since: 100 });
+    assert.deepEqual(chatRunRegistry.listBackgroundWork(), [
+      { sessionId: 'app-bg-1', tasks: [agent, shell], followUp: true, since: 100 },
+    ]);
+
+    chatRunRegistry.setBackgroundWork('app-bg-1', winding, null);
+    assert.deepEqual(chatRunRegistry.listBackgroundWork(), [
+      { sessionId: 'app-bg-1', tasks: [shell], followUp: true, since: 100 },
+    ]);
+
+    chatRunRegistry.setBackgroundWork('app-bg-1', current, null);
+    assert.deepEqual(chatRunRegistry.listBackgroundWork(), []);
+  } finally {
+    chatRunRegistry.clearAll();
+  }
+});

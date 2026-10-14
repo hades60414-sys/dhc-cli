@@ -1,5 +1,8 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { AvatarPickerDialog, UserAvatarFace } from '@/modules/user-avatar';
+import { readActiveSettingsProfile } from '@/shared/userSettings';
 import { DarkModeToggle } from '@/shared/ui';
 import type { CodeEditorSettingsState, ProjectSortOrder } from '@/shared/types';
 import { LanguageSelector } from '@/modules/i18n';
@@ -17,6 +20,33 @@ type AppearanceSettingsTabProps = {
   onCodeEditorLineNumbersChange: (value: boolean) => void;
   onCodeEditorFontSizeChange: (value: string) => void;
 };
+
+/** DHC CLI 頭像: part of this device's profile (專案設定), like the theme; also changed by clicking the avatar in chat. */
+export function MyAvatarSection() {
+  const [open, setOpen] = useState(false);
+  const profileName = readActiveSettingsProfile()?.name;
+
+  return (
+    <SettingsSection title="頭像">
+      <SettingsCard>
+        <SettingsRow
+          label="我的頭像"
+          description={`跟著這台裝置的專案設定（${profileName ?? '共用設定'}）走；你送出的訊息旁會顯示這張，也可以直接點對話裡的頭像來換。`}
+        >
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm hover:bg-accent"
+          >
+            <UserAvatarFace className="h-7 w-7" />
+            更換
+          </button>
+        </SettingsRow>
+      </SettingsCard>
+      {open && <AvatarPickerDialog open={open} onOpenChange={setOpen} profileName={profileName} />}
+    </SettingsSection>
+  );
+}
 
 /** Rendered by Settings for the "appearance" tab, covering theme, project sorting and code editor preferences. */
 export default function AppearanceSettingsTab({

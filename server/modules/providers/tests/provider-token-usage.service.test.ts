@@ -81,7 +81,7 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
         payload: {
           type: 'token_count',
           info: {
-            total_token_usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            last_token_usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
             model_context_window: 100_000,
           },
         },
@@ -91,7 +91,7 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
         payload: {
           type: 'token_count',
           info: {
-            total_token_usage: { input_tokens: 40, output_tokens: 9, total_tokens: 49 },
+            last_token_usage: { input_tokens: 40, output_tokens: 9, total_tokens: 49 },
             model_context_window: 250_000,
           },
         },
@@ -115,6 +115,35 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
   }
+});
+
+test('Codex context drops after compaction while cumulative usage grows', async () => {
+  let latestInput = 500_000;
+  const service = createProviderTokenUsageService({
+    getSessionById: () => createSessionRow({ provider: 'codex', jsonl_path: 'fixture.jsonl' }),
+    fileExists: () => true,
+    readTextFileTail: async () => ({
+      isComplete: true,
+      content: JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: { input_tokens: 1_600_000, output_tokens: 100, total_tokens: 1_600_100 },
+            last_token_usage: { input_tokens: latestInput, output_tokens: 100, total_tokens: latestInput + 100 },
+            model_context_window: 828_400,
+          },
+        },
+      }),
+    }),
+  });
+
+  assert.equal((await service.getSessionTokenUsage('app-session')).used, 500_100);
+  latestInput = 10_000;
+  const usage = await service.getSessionTokenUsage('app-session');
+  assert.equal(usage.used, 10_100);
+  assert.equal(usage.inputTokens, 10_000);
+  assert.equal(usage.total, 828_400);
 });
 
 test('OpenCode token usage resolves its provider-native id from the session row', async () => {
@@ -321,7 +350,7 @@ test('Codex token usage reads only the tail of a large rollout', async () => {
         payload: {
           type: 'token_count',
           info: {
-            total_token_usage: { input_tokens: 21, output_tokens: 8, total_tokens: 29 },
+            last_token_usage: { input_tokens: 21, output_tokens: 8, total_tokens: 29 },
             model_context_window: 150_000,
           },
         },
@@ -355,7 +384,7 @@ test('Codex token usage falls back to the whole file when the tail has no token_
         type: 'event_msg',
         payload: {
           type: 'token_count',
-          info: { total_token_usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 } },
+          info: { last_token_usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 } },
         },
       }),
       paddingLines(5 * 1024 * 1024),

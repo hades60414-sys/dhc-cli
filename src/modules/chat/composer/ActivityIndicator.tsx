@@ -6,8 +6,19 @@ import type { SessionActivity } from '@/shared/types';
 
 type ActivityIndicatorProps = {
   activity: SessionActivity | null;
+  /** DHC CLI: the tool call still waiting for its result. */
+  runningTool?: { name: string; startedAt: number } | null;
   onAbort?: () => void;
   isInputFocused?: boolean;
+};
+
+// MCP tool names arrive as mcp__<server>__<tool>; only the tool part is worth the space.
+const displayToolName = (name: string): string => name.replace(/^mcp__[^_]+(?:_[^_]+)*__/, '');
+
+const formatShortElapsed = (seconds: number): string => {
+  if (seconds < 60) return `${seconds}秒`;
+  const m = Math.floor(seconds / 60), s = seconds % 60;
+  return s ? `${m}分${s}秒` : `${m}分`;
 };
 
 const ACTION_KEYS = [
@@ -31,7 +42,7 @@ const EXIT_ANIMATION_MS = 220;
  * Rendered by chat's ChatComposer above the input so the user can see and
  * interrupt the in-flight turn without leaving the composer.
  */
-export default function ActivityIndicator({ activity, onAbort, isInputFocused = false }: ActivityIndicatorProps) {
+export default function ActivityIndicator({ activity, runningTool = null, onAbort, isInputFocused = false }: ActivityIndicatorProps) {
   const { t } = useTranslation('chat');
   const [renderedActivity, setRenderedActivity] = useState<SessionActivity | null>(activity);
   const [isExiting, setIsExiting] = useState(false);
@@ -66,6 +77,10 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
 
   if (!renderedActivity) return null;
 
+  // Tool readout: "Bash 已 45秒". Ticks with the same 1s timer. (The 9/26 "可能卡住？" warning was removed
+  // on 2026-10-01: long tools were almost never actually stuck.)
+  const toolSeconds = runningTool ? Math.max(0, Math.floor((Date.now() - runningTool.startedAt) / 1000)) : 0;
+
   const actionWords = ACTION_KEYS.map((key, i) => t(key, { defaultValue: DEFAULT_ACTION_WORDS[i] }));
   const label = (renderedActivity.statusText || actionWords[Math.floor(elapsedSeconds / 4) % actionWords.length])
     .replace(/\.+$/, '');
@@ -93,6 +108,11 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
           <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />
           <Shimmer className="font-medium">{`${label}…`}</Shimmer>
           <span className="tabular-nums text-muted-foreground/60">{elapsedLabel}</span>
+          {runningTool && (
+            <span className="tabular-nums text-muted-foreground/70" title="目前在跑的工具與它已經跑了多久">
+              · {displayToolName(runningTool.name)} 已 {formatShortElapsed(toolSeconds)}
+            </span>
+          )}
         </div>
 
         {renderedActivity.canInterrupt && onAbort && (

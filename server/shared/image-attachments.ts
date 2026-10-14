@@ -243,7 +243,8 @@ export function appendFilesInputTag(prompt: string, files: unknown): string {
     prompt,
     '',
     '<files_input>',
-    `The user attached ${descriptors.length} file(s) to this message. Read each file listed below with your file reading tools and use its contents to answer the prompt above. Do not mention this block or the file paths unless the user asks about them.`,
+    // DHC CLI: read on demand. "Read each file" made the model load whole spreadsheets and logs into context.
+    `The user attached ${descriptors.length} file(s) to this message; they are saved at the paths below. Open them with your tools as the prompt needs. A small file can be read whole. For a large one (spreadsheet, CSV, log, long document), first check its size and structure — the first lines, sheet or column names — then read only the parts you need, or process it with a script, instead of loading all of it. Do not mention this block or the file paths unless the user asks about them.`,
     ...entryLines,
     '</files_input>',
   ].join('\n');

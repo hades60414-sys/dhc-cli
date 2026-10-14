@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { TFunction } from 'i18next';
 
 import { api } from '@/shared/api';
-import { subscribeToUserPreferences } from '@/shared/userSettings';
+import { useBackgroundWorkMap } from '@/shared/backgroundWork';
+import { renameCoSession } from '@/shared/coSessions';
+import { forgetFlashTrash, isFlashProject, onFlashSessionEnded } from '@/shared/flashTasks';
+import { getUserPreferencesVersion, resolveSettingsProjectId, subscribeToUserPreferences } from '@/shared/userSettings';
 import { usePaletteOps } from '@/modules/command-palette';
+import { getWorkspaceRootName } from '@/shared/dhcConfig';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, ConversationProjectResult, ConversationSearchResults, LLMProvider, Project, ProjectSession, ProjectSortOrder, RecentConversationListItem, SearchProgress, ActiveSidebarRename, PendingSidebarDeletion, SessionTitleSearchResult, SessionWithProvider, SidebarSearchMode } from '@/shared/types';
 import {
   filterProjects,
@@ -16,6 +20,59 @@ import {
   readProjectSortOrder,
 } from '@/modules/sidebar/utils/sidebarStoredPreferences';
 
+
+/** 工作區＝父資料夾就是工作區根目錄的專案（每個工作各一個資料夾）。 */
+export const isWorkspaceProject = (project: Pick<Project, 'fullPath' | 'path'>): boolean => {
+  const parts = String(project.fullPath || project.path || '').split(/[\\/]+/).filter(Boolean);
+  return parts.length >= 2 && parts[parts.length - 2] === getWorkspaceRootName();
+};
+
+/**
+ * DHC CLI 查詢分頁：工作區根目錄下的「內部資料查詢」和它底下第一層子資料夾（各專區）。
+ * 只在查詢分頁出現，不列在專案清單。新增專區＝在內部資料查詢底下建資料夾＋註冊專案，再在 SidebarContent 查詢說明卡補一行。
+ */
+export const QUERY_PROJECT_FOLDER = '內部資料查詢';
+export const isQueryProject = (project: Pick<Project, 'fullPath' | 'path'>): boolean => {
+  const parts = String(project.fullPath || project.path || '').split(/[\\/]+/).filter(Boolean);
+  const rootIndex = parts.lastIndexOf(QUERY_PROJECT_FOLDER);
+  return rootIndex >= 1
+    && parts[rootIndex - 1] === getWorkspaceRootName()
+    && parts.length - rootIndex <= 2;
+};
+
+/**
+ * DHC CLI 例行分頁：工作區根目錄下「例行工作」底下第一層子資料夾，一個資料夾＝一項例行工作（例：月報）。
+ * 共用規則寫在 例行工作\CLAUDE.md，各項的規格寫在自己資料夾的 CLAUDE.md。只在例行分頁出現。
+ */
+export const ROUTINE_PROJECT_FOLDER = '例行工作';
+export const isRoutineProject = (project: Pick<Project, 'fullPath' | 'path'>): boolean => {
+  const parts = String(project.fullPath || project.path || '').split(/[\\/]+/).filter(Boolean);
+  const rootIndex = parts.lastIndexOf(ROUTINE_PROJECT_FOLDER);
+  return rootIndex >= 1
+    && parts[rootIndex - 1] === getWorkspaceRootName()
+    && parts.length - rootIndex === 2;
+};
+
+/**
+ * DHC CLI 搜尋：結果只留側欄看得到的專案（10/05 以前的伺服器不認 projectIds，會連批次實驗的對話一起回），
+ * 符合數只算留下的。找不到所屬專案（projectId 為 null）的照樣顯示。
+ */
+export const keepSearchResultsInProjects = (
+  results: ConversationSearchResults,
+  projectIds: ReadonlySet<string>,
+): ConversationSearchResults => {
+  const inScope = (projectId: string | null) => projectId === null || projectIds.has(projectId);
+  const projectResults = results.results.filter((result) => inScope(result.projectId));
+  return {
+    ...results,
+    results: projectResults,
+    titleResults: results.titleResults.filter((result) => inScope(result.projectId)),
+    totalMatches: projectResults.reduce(
+      (sum, result) => sum + result.sessions.reduce((count, session) => count + session.matches.length, 0),
+      0,
+    ),
+  };
+};
 
 type ArchivedSessionsApiPayload = {
   success?: boolean;
@@ -111,6 +168,7 @@ export function useSidebarController({
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [optimisticStarByProjectId, setOptimisticStarByProjectId] = useState<Map<string, boolean>>(new Map());
   const [loadingMoreProjects, setLoadingMoreProjects] = useState<Set<string>>(new Set());
+  const loadingMoreRef = useRef<Set<string>>(new Set());
   const searchSeqRef = useRef(0);
   const recentConversationsSeqRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -119,7 +177,12 @@ export function useSidebarController({
   const onRefreshRef = useRef(onRefresh);
 
   const isSidebarCollapsed = !isMobile && !sidebarVisible;
-  const activeSessionIds = activeSessions;
+  // DHC CLI 10/07: sessions whose subagents/background work are still going (violet light) count as running too.
+  const backgroundWorkById = useBackgroundWorkMap();
+  const activeSessionIds = useMemo(
+    () => (backgroundWorkById.size === 0 ? activeSessions : new Set([...activeSessions, ...backgroundWorkById.keys()])),
+    [activeSessions, backgroundWorkById],
+  );
   const runningSessionsCount = activeSessionIds.size;
 
   useEffect(() => {
@@ -369,6 +432,12 @@ export function useSidebarController({
     };
   }, [searchFilter]);
 
+  // DHC：搜尋範圍＝側欄看得到的專案。用字串當依賴，專案清單換新物件時不會重搜。
+  const searchScopeKey = useMemo(
+    () => projects.filter((project) => isWorkspaceProject(project) || isQueryProject(project) || isRoutineProject(project)).map((project) => project.projectId).join(','),
+    [projects],
+  );
+
   // Debounced conversation search with SSE streaming
   useEffect(() => {
     if (eventSourceRef.current) {
@@ -377,7 +446,8 @@ export function useSidebarController({
     }
 
     const query = debouncedSearchQuery;
-    if (searchMode !== 'conversations' || query.length < 2) {
+    // DHC：「專案」分頁的搜尋框也找對話標題與內容，不再只比對專案名稱。
+    if ((searchMode !== 'conversations' && searchMode !== 'projects') || query.length < 2) {
       searchSeqRef.current += 1;
       setConversationResults(null);
       setSearchProgress(null);
@@ -394,7 +464,7 @@ export function useSidebarController({
       return;
     }
 
-    const url = api.searchConversationsUrl(query);
+    const url = api.searchConversationsUrl(query, 100, searchScopeKey ? searchScopeKey.split(',') : []);
     const es = new EventSource(url);
     eventSourceRef.current = es;
 
@@ -486,7 +556,15 @@ export function useSidebarController({
         eventSourceRef.current = null;
       }
     };
-  }, [debouncedSearchQuery, searchMode]);
+  }, [debouncedSearchQuery, searchMode, searchScopeKey]);
+
+  const visibleConversationResults = useMemo(
+    () => conversationResults && keepSearchResultsInProjects(
+      conversationResults,
+      new Set(searchScopeKey ? searchScopeKey.split(',') : []),
+    ),
+    [conversationResults, searchScopeKey],
+  );
 
   // All sidebar state keys (expanded, starred, loading, etc.) use the DB
   // `projectId` as their identifier after the migration.
@@ -585,25 +663,15 @@ export function useSidebarController({
   const getProjectSessions = useCallback((project: Project) => getAllSessions(project), []);
 
   const loadMoreSessionsForProject = useCallback(async (projectId: string) => {
-    if (!onLoadMoreSessions) {
+    // DHC CLI: the in-flight guard used to be decided inside the state updater. React may run an updater
+    // later, during the next render (it does when the call comes from an effect, as the 收納盒 auto-load's
+    // does), so the request was skipped while the flag still got set — "loading" forever, button dead.
+    if (!onLoadMoreSessions || loadingMoreRef.current.has(projectId)) {
       return;
     }
 
-    let shouldLoad = false;
-    setLoadingMoreProjects((previous) => {
-      if (previous.has(projectId)) {
-        return previous;
-      }
-
-      shouldLoad = true;
-      const next = new Set(previous);
-      next.add(projectId);
-      return next;
-    });
-
-    if (!shouldLoad) {
-      return;
-    }
+    loadingMoreRef.current.add(projectId);
+    setLoadingMoreProjects((previous) => new Set(previous).add(projectId));
 
     try {
       await onLoadMoreSessions(projectId);
@@ -611,6 +679,7 @@ export function useSidebarController({
       console.error('[Sidebar] Failed to load more sessions:', error);
       alert(t('messages.refreshError'));
     } finally {
+      loadingMoreRef.current.delete(projectId);
       setLoadingMoreProjects((previous) => {
         const next = new Set(previous);
         next.delete(projectId);
@@ -642,9 +711,28 @@ export function useSidebarController({
     });
   }, [optimisticStarByProjectId, projects]);
 
+  // DHC：側欄只顯示工作區根目錄底下第一層的工作區（加上查詢專區、例行工作）；Codex 暫存、工具暫存目錄、其他子資料夾都隱藏
+  const hiddenProjectIds = useMemo(
+    () => new Set(projects.filter((project) => !isWorkspaceProject(project) && !isQueryProject(project) && !isRoutineProject(project)).map((project) => project.projectId)),
+    [projects],
+  );
+
+  // DHC：設定檔綁定的專案置頂；切換設定檔會重新整理，所以 hydrate 後讀一次即可。
+  useSyncExternalStore(subscribeToUserPreferences, getUserPreferencesVersion);
+  const settingsProjectId = resolveSettingsProjectId(projects);
+
   const sortedProjects = useMemo(
-    () => sortProjects(projectsWithResolvedStarState, projectSortOrder),
-    [projectSortOrder, projectsWithResolvedStarState],
+    () => sortProjects(
+      projectsWithResolvedStarState.filter((project) => !hiddenProjectIds.has(project.projectId)),
+      projectSortOrder,
+      settingsProjectId,
+    ),
+    [hiddenProjectIds, projectSortOrder, projectsWithResolvedStarState, settingsProjectId],
+  );
+
+  const visibleRecentConversations = useMemo(
+    () => recentConversations.filter((conversation) => !conversation.projectId || !hiddenProjectIds.has(conversation.projectId)),
+    [hiddenProjectIds, recentConversations],
   );
 
   const runningProjects = useMemo(() => {
@@ -674,7 +762,17 @@ export function useSidebarController({
   }, [activeSessionIds, sortedProjects]);
 
   const filteredProjects = useMemo(
-    () => filterProjects(searchMode === 'running' ? runningProjects : sortedProjects, debouncedSearchQuery),
+    () => filterProjects(
+      searchMode === 'running'
+        ? runningProjects
+        : searchMode === 'query'
+          ? sortedProjects.filter(isQueryProject)
+          : searchMode === 'routine'
+            ? sortedProjects.filter(isRoutineProject)
+            // DHC CLI 10/05: 快閃任務 is now a per-session ⚡, so the old 快閃任務區 folder no longer shows as a project.
+            : sortedProjects.filter((project) => !isQueryProject(project) && !isRoutineProject(project) && !isFlashProject(project)),
+      debouncedSearchQuery,
+    ),
     [debouncedSearchQuery, runningProjects, searchMode, sortedProjects],
   );
 
@@ -823,6 +921,17 @@ export function useSidebarController({
     }
   }, [fetchArchivedSessions, onSessionDelete, pendingDeletion, t]);
 
+  // DHC CLI 快閃任務區: a session ended from its × or the header button leaves the recents list too.
+  useEffect(() => onFlashSessionEnded((sessionId) => {
+    setRecentConversations((previous) => {
+      const remaining = previous.filter((conversation) => conversation.sessionId !== sessionId);
+      if (remaining.length !== previous.length) {
+        setRecentConversationsTotal((total) => Math.max(0, total - 1));
+      }
+      return remaining;
+    });
+  }), []);
+
   const requestProjectDelete = useCallback(
     (project: Project) => {
       setPendingDeletion({
@@ -939,6 +1048,7 @@ export function useSidebarController({
         return;
       }
 
+      void forgetFlashTrash(sessionId);
       await Promise.all([
         Promise.resolve(onRefresh()),
         fetchArchivedSessions(),
@@ -985,6 +1095,7 @@ export function useSidebarController({
               ? { ...conversation, sessionTitle: trimmed }
               : conversation
           )));
+          renameCoSession(sessionId, trimmed);
           await onRefresh();
         } else {
           console.error('[Sidebar] Failed to rename session:', response.status);
@@ -1057,7 +1168,7 @@ export function useSidebarController({
     archivedSessions: filteredArchivedSessions,
     archivedSessionsCount: archivedProjects.length + archivedSessions.length,
     isArchivedSessionsLoading,
-    recentConversations,
+    recentConversations: visibleRecentConversations,
     recentConversationsTotal,
     recentConversationsHasMore,
     isRecentConversationsLoading,
@@ -1092,7 +1203,7 @@ export function useSidebarController({
     setShowNewProject,
     searchMode,
     setSearchMode,
-    conversationResults,
+    conversationResults: visibleConversationResults,
     isSearching,
     searchProgress,
     clearConversationResults: useCallback(() => {

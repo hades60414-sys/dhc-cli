@@ -403,6 +403,49 @@ test('an edited prompt replaces the one it superseded instead of stacking on it'
   }
 });
 
+// DHC：兩則背景工作通知掛在同一個 parent 下（CLI 常這樣寫），不是編輯；
+// 之前第一則被當成「被取代」，接在它後面的整段對話都從畫面消失。
+test('two task notifications under one parent are not mistaken for an edit', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'claude-task-notifications-'));
+  const sessionId = 'claude-notification-session';
+  const note = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n</task-notification>`;
+
+  try {
+    const transcriptPath = path.join(tempRoot, `${sessionId}.jsonl`);
+    const rows = [
+      { type: 'user', uuid: 'u1', parentUuid: null, sessionId, timestamp: '2026-09-26T10:00:00.000Z',
+        message: { role: 'user', content: 'start two background jobs' } },
+      { type: 'assistant', uuid: 'a1', parentUuid: 'u1', sessionId, timestamp: '2026-09-26T10:00:01.000Z',
+        message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'started' }] } },
+      { type: 'user', uuid: 'n1', parentUuid: 'a1', sessionId, timestamp: '2026-09-26T10:05:00.000Z',
+        message: { role: 'user', content: note('job-1') } },
+      { type: 'assistant', uuid: 'a2', parentUuid: 'n1', sessionId, timestamp: '2026-09-26T10:05:01.000Z',
+        message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'job 1 done' }] } },
+      { type: 'user', uuid: 'u3', parentUuid: 'a2', sessionId, timestamp: '2026-09-26T10:06:00.000Z',
+        message: { role: 'user', content: 'later question' } },
+      { type: 'assistant', uuid: 'a3', parentUuid: 'u3', sessionId, timestamp: '2026-09-26T10:06:01.000Z',
+        message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'later answer' }] } },
+      { type: 'user', uuid: 'n2', parentUuid: 'a1', sessionId, timestamp: '2026-09-26T10:10:00.000Z',
+        message: { role: 'user', content: note('job-2') } },
+    ];
+    await writeFile(transcriptPath, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8');
+
+    await withIsolatedDatabase(async () => {
+      const now = new Date().toISOString();
+      sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Notification session', now, now, transcriptPath);
+
+      const history = await new ClaudeSessionsProvider().fetchHistory(sessionId, { providerSessionId: sessionId });
+      const texts = history.messages.map((message) => String(message.content ?? ''));
+
+      for (const expected of ['job 1 done', 'later question', 'later answer']) {
+        assert.ok(texts.includes(expected), `${expected} must stay visible, got ${JSON.stringify(texts)}`);
+      }
+    });
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('parallel tool calls are not mistaken for an edit', { concurrency: false }, async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'claude-parallel-tools-'));
   const sessionId = 'claude-parallel-session';

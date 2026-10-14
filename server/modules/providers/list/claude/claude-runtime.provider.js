@@ -281,7 +281,12 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.systemPrompt = {
     type: 'preset',
-    preset: 'claude_code'
+    preset: 'claude_code',
+    // DHC CLI: a queued (night / alarm) run appends its unattended-work instructions here, so they steer the
+    // model without showing up in the user's message.
+    ...(typeof options.appendSystemPrompt === 'string' && options.appendSystemPrompt.trim()
+      ? { append: options.appendSystemPrompt }
+      : {})
   };
 
   sdkOptions.settingSources = ['project', 'user', 'local'];
@@ -570,6 +575,57 @@ function startsBackgroundWork(sdkMessage) {
 }
 
 /**
+ * DHC CLI: follows the work a CLI keeps doing after its turn reported `complete`, so the sidebar can keep a
+ * light on while a session's subagents or background shells are still going.
+ *
+ * The CLI pushes `background_tasks_changed` with every live background task (replace semantics) and flags
+ * the ones that are not activity — housekeeping tasks and watchers — as `ambient`. When the work reports
+ * back, the CLI starts a follow-up turn by itself (a fresh `system/init`, then a `result`); that turn counts
+ * too, or the light would go out while Claude is still answering.
+ *
+ * @param {() => number} now - Clock, injectable for tests
+ * @returns {{
+ *   observe: (sdkMessage: Object, turnCompleted: boolean) => boolean,
+ *   snapshot: () => (import('@/shared/types.js').BackgroundWorkReport | null)
+ * }} `observe` feeds one SDK message and says whether the snapshot changed; `snapshot` is null when idle.
+ */
+export function createBackgroundWorkTracker(now = Date.now) {
+  let tasks = [];
+  let followUp = false;
+  let since = null;
+
+  const snapshot = () => (tasks.length > 0 || followUp ? { tasks, followUp, since } : null);
+
+  return {
+    observe(sdkMessage, turnCompleted) {
+      const before = JSON.stringify(snapshot());
+      if (sdkMessage?.type === 'system' && sdkMessage.subtype === 'background_tasks_changed') {
+        tasks = (Array.isArray(sdkMessage.tasks) ? sdkMessage.tasks : [])
+          .filter((task) => task && !task.ambient)
+          .map((task) => ({ type: String(task.task_type || ''), description: String(task.description || '') }));
+      } else if (sdkMessage?.type === 'result') {
+        followUp = false;
+      } else if (turnCompleted && (
+        (sdkMessage?.type === 'system' && sdkMessage.subtype === 'init')
+        || (sdkMessage?.type === 'assistant' && !sdkMessage.parent_tool_use_id)
+      )) {
+        followUp = true;
+      } else {
+        return false;
+      }
+      const active = tasks.length > 0 || followUp;
+      if (!active) {
+        since = null;
+      } else if (since === null) {
+        since = now();
+      }
+      return JSON.stringify(snapshot()) !== before;
+    },
+    snapshot
+  };
+}
+
+/**
  * Builds the SDK user messages for one turn.
  *
  * Always returns SDKUserMessage records rather than a bare string: a string
@@ -730,6 +786,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   // Set once a turn publishes a budget read from an assistant message, so the
   // turn-ending `result` is only mined for usage when nothing better arrived.
   let assistantBudgetSent = false;
+  // DHC CLI: after-turn work (background subagents/shells, the follow-up turn) reported through the runtime
+  // context under this process's own owner key; the finally block clears it once the CLI is gone.
+  const backgroundWork = createBackgroundWorkTracker();
+  const backgroundWorkOwner = {};
+  let backgroundWorkKey = null;
 
   // A new turn supersedes any earlier one still holding this session's process
   // open, so held runs cannot stack up across a conversation.
@@ -977,7 +1038,9 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         const abortPending = sessionKey() ? abortedSessionIds.has(sessionKey()) : false;
         if (!turnCompleteSent && !abortPending) {
           turnCompleteSent = true;
-          ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 0 }));
+          // DHC CLI: a result that is itself an error (usage limit, API error, max turns) ends the run with exit
+          // code 1 so the night queue can tell it from a finished turn. The chat UI does not read the exit code.
+          ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: message.is_error ? 1 : 0 }));
           notifyRunStopped({
             userId: ws?.userId || null,
             provider: 'claude',
@@ -1011,6 +1074,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       } else if (idleReleaseTimer) {
         // Background activity after the turn — push the countdown back out.
         scheduleRelease();
+      }
+
+      if (backgroundWork.observe(message, turnCompleteSent) && sessionKey()) {
+        backgroundWorkKey = sessionKey();
+        context.reportBackgroundWork?.(backgroundWorkKey, backgroundWorkOwner, backgroundWork.snapshot());
       }
     }
 
@@ -1094,6 +1162,9 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       idleReleaseTimer = null;
     }
     releasePromptStream();
+    if (backgroundWorkKey) {
+      context.reportBackgroundWork?.(backgroundWorkKey, backgroundWorkOwner, null);
+    }
   }
 }
 

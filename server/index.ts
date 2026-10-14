@@ -47,6 +47,12 @@ import {
     initializeScheduledMessageDispatcher,
     scheduledMessagesRoutes,
 } from './modules/scheduled-messages/index.js';
+import {
+    closeNightQueueDispatcher,
+    initializeNightQueueDispatcher,
+    nightQueueRoutes,
+} from './modules/night-queue/index.js';
+import { dhcRoutes, initializeWorkspace, loadDhcConfig } from './modules/dhc/index.js';
 import browserUseRoutes from './modules/browser-use/browser-use.routes.js';
 import { assetsRoutes } from './modules/assets/index.js';
 import { fileTreeRoutes } from './modules/file-tree/index.js';
@@ -193,6 +199,11 @@ app.use('/api/browser-use', authenticateToken, browserUseRoutes);
 // Unified provider MCP routes (protected)
 app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/scheduled-messages', authenticateToken, scheduledMessagesRoutes);
+// DHC CLI: night mode — prompts held per session and run one at a time from 02:00.
+app.use('/api/night-queue', authenticateToken, nightQueueRoutes);
+// DHC CLI: dhc.config.json (workspace root, personal/team mode, agents, domain), read once at startup.
+loadDhcConfig();
+app.use('/api/dhc', authenticateToken, dhcRoutes);
 
 // Agent API Routes (uses API key authentication)
 app.use('/api/agent', agentRoutes);
@@ -275,7 +286,8 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
 });
 
 const SERVER_PORT = Number.parseInt(process.env.SERVER_PORT || '3001', 10);
-const HOST = process.env.HOST || '0.0.0.0';
+// DHC CLI: only this machine by default; set HOST=0.0.0.0 to open it to the LAN (set a login first).
+const HOST = process.env.HOST || '127.0.0.1';
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 const LOCAL_SERVER_MARKER_PATH = path.join(os.homedir(), '.cloudcli', 'local-server.json');
@@ -330,6 +342,9 @@ async function startServer() {
         // Initialize authentication database
         await initializeDatabase();
 
+        // DHC CLI: create the workspace root from workspace-template/ on first start (never overwrites).
+        await initializeWorkspace();
+
         // Configure Web Push (VAPID keys)
         configureWebPush();
 
@@ -355,7 +370,7 @@ async function startServer() {
 
             console.log('');
             console.log(terminalTextStyles.dim('═'.repeat(63)));
-            console.log(`  ${terminalTextStyles.bright('CloudCLI Server - Ready')}`);
+            console.log(`  ${terminalTextStyles.bright('DHC CLI Server - Ready')}`);
             console.log(terminalTextStyles.dim('═'.repeat(63)));
             console.log('');
             console.log(`${terminalTextStyles.info('[INFO]')} Server URL:  ${terminalTextStyles.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
@@ -368,6 +383,7 @@ async function startServer() {
             // Sends anything that came due while the server was not running,
             // then keeps polling.
             initializeScheduledMessageDispatcher(providerRuntimeService);
+            initializeNightQueueDispatcher(providerRuntimeService);
 
             // Start server-side plugin processes for enabled plugins
             startEnabledPluginServers().catch(err => {
@@ -377,6 +393,7 @@ async function startServer() {
 
         await closeSessionsWatcher();
         closeScheduledMessageDispatcher();
+        closeNightQueueDispatcher();
         // Clean up plugin processes on shutdown
         const shutdownRuntimeServices = async () => {
             try {

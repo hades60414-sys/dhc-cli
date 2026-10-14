@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { LLMProvider, ProviderAuthStatusMap } from '@/shared/types';
 import AgentConnectionCard from '@/modules/onboarding/AgentConnectionCard';
+import { filterEnabledAgents, useEnabledAgents } from '@/shared/dhcConfig';
 
 type AgentConnectionsStepProps = {
   providerStatuses: ProviderAuthStatusMap;
@@ -45,6 +46,7 @@ export default function AgentConnectionsStep({
   onOpenProviderLogin,
 }: AgentConnectionsStepProps) {
   const { t } = useTranslation('auth');
+  const enabledAgents = useEnabledAgents();
   return (
     <div className="space-y-4">
       <div className="text-center">
@@ -55,7 +57,7 @@ export default function AgentConnectionsStep({
       </div>
 
       <div className="-mr-1 max-h-[38vh] space-y-2 overflow-y-auto pr-1">
-        {providerCards.map((providerCard) => (
+        {filterEnabledAgents(providerCards, (card) => card.provider, enabledAgents).map((providerCard) => (
           <AgentConnectionCard
             key={providerCard.provider}
             provider={providerCard.provider}

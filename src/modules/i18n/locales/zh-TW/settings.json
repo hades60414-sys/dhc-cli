@@ -116,9 +116,21 @@
     },
     "events": {
       "title": "事件類型",
-      "actionRequired": "需要處理",
-      "stop": "執行已停止",
-      "error": "執行失敗"
+      "actionRequired": "需要你回答或授權",
+      "stop": "回覆完成",
+      "error": "執行出錯"
+    },
+    "browser": {
+      "title": "瀏覽器通知（分頁開著時）",
+      "description": "不經推播服務，只要這個分頁還開著就會跳系統通知。適合分頁被切到後面或縮小的時候。",
+      "unsupported": "此瀏覽器不支援通知。",
+      "denied": "通知已被瀏覽器封鎖，請在網址列左邊的網站設定裡允許。",
+      "enable": "啟用瀏覽器通知",
+      "disable": "關閉瀏覽器通知",
+      "test": "測試通知",
+      "testBody": "通知會長這樣。點一下會回到對應的 session。",
+      "onlyBackground": "只在分頁不在前景時通知（正在看的時候不吵）",
+      "eventsHint": "通知哪些事件，用下面「事件類型」的勾選。"
     }
   },
   "appearanceSettings": {

@@ -8,6 +8,10 @@ import { providerTokenUsageService } from '@/modules/providers/services/provider
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { providerRuntimeService } from '@/modules/providers/services/provider-runtime.service.js';
+import { sessionTitleSuggestService } from '@/modules/providers/services/session-title-suggest.service.js';
+import { planBoardAssistService } from '@/modules/providers/services/plan-board-assist.service.js';
+import { toolAssistService } from '@/modules/providers/services/tool-assist/tool-assist.service.js';
 import type {
   CustomProviderModelInput,
   LLMProvider,
@@ -375,6 +379,15 @@ const parseSessionSearchLimit = (value: unknown): number => {
   return Math.max(1, Math.min(parsed, 100));
 };
 
+// Comma-separated project ids that limit the search; absent means every project.
+const parseSessionSearchProjectIds = (value: unknown): string[] | null => {
+  const ids = (readOptionalQueryString(value) ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? ids : null;
+};
+
 const parseBoundedIntegerQuery = <T extends number | null>(
   value: unknown,
   name: string,
@@ -740,7 +753,15 @@ router.get(
   '/sessions/running',
   asyncHandler(async (_req: Request, res: Response) => {
     const sessions = sessionsService.listRunningSessions();
-    res.json(createApiSuccessResponse({ sessions }));
+    // DHC CLI: the sidebar's 5-second poll also learns which sessions still have background work going.
+    const background = sessionsService.listBackgroundSessions();
+    // DHC CLI: and which of them stopped on a prompt only a person can answer (choice question / review).
+    const waiting = sessions.flatMap(({ sessionId }) =>
+      providerRuntimeService.getPendingApprovalsForSession(sessionId).map((request) => {
+        const record = (request ?? {}) as Record<string, unknown>;
+        return { sessionId, requestId: record.requestId, toolName: record.toolName };
+      }));
+    res.json(createApiSuccessResponse({ sessions, background, waiting }));
   }),
 );
 
@@ -805,6 +826,31 @@ router.delete(
   }),
 );
 
+// DHC CLI 10/13 「快速取名」: a short name for what the session is doing now (fills the rename box, saves nothing).
+router.post(
+  '/sessions/:sessionId/suggest-title',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    res.json(createApiSuccessResponse(await sessionTitleSuggestService.suggest(sessionId)));
+  }),
+);
+
+// DHC CLI 10/13 規劃白板: the chat beside the canvas (answers, and may send back a redrawn board; saves nothing).
+router.post(
+  '/plan-board/assist',
+  asyncHandler(async (req: Request, res: Response) => {
+    res.json(createApiSuccessResponse(await planBoardAssistService.assist(req.body)));
+  }),
+);
+
+// DHC CLI 10/14 工具庫: the chat beside each tool (answers, and may send back a change for the page to apply).
+router.post(
+  '/tool-assist',
+  asyncHandler(async (req: Request, res: Response) => {
+    res.json(createApiSuccessResponse(await toolAssistService.assist(req.body)));
+  }),
+);
+
 router.post(
   '/sessions/:sessionId/restore',
   asyncHandler(async (req: Request, res: Response) => {
@@ -851,6 +897,7 @@ router.get(
 router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) => {
   const query = parseSessionSearchQuery(req.query.q);
   const limit = parseSessionSearchLimit(req.query.limit);
+  const projectIds = parseSessionSearchProjectIds(req.query.projectIds);
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -870,6 +917,7 @@ router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) 
     await sessionConversationsSearchService.search({
       query,
       limit,
+      projectIds,
       signal: abortController.signal,
       onTitleResults: (titleResults) => {
         if (!closed) {

@@ -105,6 +105,20 @@ const THREE_TURNS = [
   ...turn('turn-c', ['third prompt']),
 ];
 
+test('Codex history context prefers the latest request over cumulative usage', { concurrency: false }, async () => {
+  await withIndexedSession([
+    ...THREE_TURNS,
+    { type: 'event_msg', payload: { type: 'token_count', info: {
+      total_token_usage: { input_tokens: 1_600_000, output_tokens: 100, total_tokens: 1_600_100 },
+      last_token_usage: { input_tokens: 10_000, output_tokens: 100, total_tokens: 10_100 },
+      model_context_window: 828_400,
+    } } },
+  ], async ({ sessionId }) => {
+    const history = await new CodexSessionsProvider().fetchHistory(sessionId);
+    assert.deepEqual(history.tokenUsage, { used: 10_100, total: 828_400 });
+  });
+});
+
 test('every Codex prompt is anchored to the turn that contains it', { concurrency: false }, async () => {
   await withIndexedSession(THREE_TURNS, async ({ sessionId }) => {
     const history = await new CodexSessionsProvider().fetchHistory(sessionId);
@@ -316,7 +330,7 @@ test('a session detached by an edit reports no token usage of its own', { concur
       payload: {
         type: 'token_count',
         info: {
-          total_token_usage: { input_tokens: 100_000, output_tokens: 25_000, total_tokens: 125_000 },
+          last_token_usage: { input_tokens: 100_000, output_tokens: 25_000, total_tokens: 125_000 },
           model_context_window: 200_000,
         },
       },
