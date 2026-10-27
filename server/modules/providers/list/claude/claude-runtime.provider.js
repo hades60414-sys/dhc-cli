@@ -38,6 +38,8 @@ import {
 } from '@/modules/notifications/index.js';
 import { createCompleteMessage, createNormalizedMessage } from '@/shared/utils.js';
 
+import { spawnTrackedCli, sweepCliProcessTree } from './claude-stop-sweep.js';
+
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
 // Sessions cancelled via abort-session. The abort handler already sent the
@@ -950,6 +952,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       return { behavior: 'deny', message: decision.message ?? 'User denied tool use' };
     };
 
+    // DHC CLI 2026-10-27: remember the CLI's pid so 停止 can end what it leaves behind (claude-stop-sweep.js).
+    const cliProcess = {};
+    sdkOptions.spawnClaudeCodeProcess = spawnTrackedCli(cliProcess);
+
     let heldPrompt = createHeldPromptStream(promptMessages);
     releasePromptStream = heldPrompt.release;
     try {
@@ -971,6 +977,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         options: sdkOptions
       });
     }
+    queryInstance.dhcCliProcess = cliProcess;
 
     // Track the query instance for abort capability
     if (sessionKey()) {
@@ -1181,6 +1188,7 @@ async function abortClaudeSDKSession(sessionId) {
     return false;
   }
 
+  const cli = session.instance?.dhcCliProcess;
   try {
     console.log(`Aborting SDK session: ${sessionId}`);
 
@@ -1201,11 +1209,16 @@ async function abortClaudeSDKSession(sessionId) {
     // Clean up session
     removeSession(sessionId);
 
+    // Subagent shells outlive the interrupted CLI; end the whole tree shortly after.
+    sweepCliProcessTree(cli?.pid, cli?.startedAt);
+
     return true;
   } catch (error) {
     console.error(`Error aborting session ${sessionId}:`, error);
     // The run keeps going; let it emit its own terminal complete.
     abortedSessionIds.delete(sessionId);
+    // The UI already shows it stopped, so end it for real.
+    sweepCliProcessTree(cli?.pid, cli?.startedAt);
     return false;
   }
 }
